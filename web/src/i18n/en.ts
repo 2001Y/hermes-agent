@@ -54,6 +54,7 @@ export const en: Translations = {
     },
     nav: {
       status: "Status",
+      memory: "Memory",
       sessions: "Sessions",
       analytics: "Analytics",
       logs: "Logs",
@@ -62,6 +63,27 @@ export const en: Translations = {
       config: "Config",
       keys: "Keys",
     },
+  },
+
+  memory: {
+    title: "Memory",
+    userProfile: "User Profile",
+    notes: "Memory Notes",
+    builtInOnly: "built-in only",
+    provider: "Provider",
+    builtIn: "Built-in",
+    directory: "Directory",
+    refresh: "Refresh",
+    snapshotNote: "Saved immediately. Changes apply to future sessions; current sessions keep their existing snapshot.",
+    addEntry: "Add entry",
+    emptyStore: "No entries yet",
+    entryCount: "entries",
+    chars: "chars",
+    edit: "Edit",
+    delete: "Delete",
+    saveFailed: "Failed to save memory entry",
+    addFailed: "Failed to add memory entry",
+    deleteFailed: "Failed to delete memory entry",
   },
 
   status: {

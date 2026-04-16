@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { Routes, Route, NavLink, Navigate } from "react-router-dom";
 import {
-  Activity, BarChart3, Clock, FileText, KeyRound,
+  Activity, BarChart3, Brain, Clock, FileText, KeyRound,
   MessageSquare, Package, Settings, Puzzle,
   Sparkles, Terminal, Globe, Database, Shield,
   Wrench, Zap, Heart, Star, Code, Eye,
@@ -14,6 +14,7 @@ import LogsPage from "@/pages/LogsPage";
 import AnalyticsPage from "@/pages/AnalyticsPage";
 import CronPage from "@/pages/CronPage";
 import SkillsPage from "@/pages/SkillsPage";
+import MemoryPage from "@/pages/MemoryPage";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -34,6 +35,7 @@ interface NavItem {
 const BUILTIN_NAV: NavItem[] = [
   { path: "/", labelKey: "status", label: "Status", icon: Activity },
   { path: "/sessions", labelKey: "sessions", label: "Sessions", icon: MessageSquare },
+  { path: "/memory", labelKey: "memory", label: "Memory", icon: Brain },
   { path: "/analytics", labelKey: "analytics", label: "Analytics", icon: BarChart3 },
   { path: "/logs", labelKey: "logs", label: "Logs", icon: FileText },
   { path: "/cron", labelKey: "cron", label: "Cron", icon: Clock },
@@ -48,7 +50,7 @@ const BUILTIN_NAV: NavItem[] = [
 
 /** Map of icon names plugins can use. Covers common choices without importing all of lucide. */
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
-  Activity, BarChart3, Clock, FileText, KeyRound,
+  Activity, BarChart3, Brain, Clock, FileText, KeyRound,
   MessageSquare, Package, Settings, Puzzle,
   Sparkles, Terminal, Globe, Database, Shield,
   Wrench, Zap, Heart, Star, Code, Eye,
@@ -159,6 +161,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<StatusPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
+          <Route path="/memory" element={<MemoryPage />} />
           <Route path="/analytics" element={<AnalyticsPage />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/cron" element={<CronPage />} />

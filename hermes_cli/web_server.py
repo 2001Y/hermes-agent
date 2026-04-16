@@ -46,6 +46,14 @@ from hermes_cli.config import (
     redact_key,
 )
 from gateway.status import get_running_pid, read_runtime_status
+from tools.memory_tool import (
+    MemoryStore,
+    get_memory_dir,
+    load_memory_entries,
+    memory_char_count,
+    memory_char_limit,
+    memory_entry_id,
+)
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -330,22 +338,24 @@ class EnvVarReveal(BaseModel):
     key: str
 
 
+class MemoryEntryCreate(BaseModel):
+    content: str
+
+
+class MemoryEntryUpdate(BaseModel):
+    content: str
+
+
 _GATEWAY_HEALTH_URL = os.getenv("GATEWAY_HEALTH_URL")
 _GATEWAY_HEALTH_TIMEOUT = float(os.getenv("GATEWAY_HEALTH_TIMEOUT", "3"))
 
 
-def _probe_gateway_health() -> tuple[bool, dict | None]:
+def _probe_gateway_health() -> tuple[bool, Optional[dict]]:
     """Probe the gateway via its HTTP health endpoint (cross-container).
 
     Uses ``/health/detailed`` first (returns full state), falling back to
-    the simpler ``/health`` endpoint.  Returns ``(is_alive, body_dict)``.
-
-    Accepts any of these as ``GATEWAY_HEALTH_URL``:
-    - ``http://gateway:8642``                (base URL — recommended)
-    - ``http://gateway:8642/health``         (explicit health path)
-    - ``http://gateway:8642/health/detailed`` (explicit detailed path)
-
-    This is a **blocking** call — run via ``run_in_executor`` from async code.
+    the simpler ``/health`` endpoint. Returns ``(alive, body)`` where body
+    is the decoded JSON payload when available.
     """
     if not _GATEWAY_HEALTH_URL:
         return False, None
@@ -368,6 +378,65 @@ def _probe_gateway_health() -> tuple[bool, dict | None]:
         except Exception:
             continue
     return False, None
+
+
+# ---------------------------------------------------------------------------
+# Memory helpers
+# ---------------------------------------------------------------------------
+
+
+def _memory_file_path(target: str) -> Path:
+    if target == "user":
+        return get_memory_dir() / "USER.md"
+    if target == "memory":
+        return get_memory_dir() / "MEMORY.md"
+    raise HTTPException(status_code=400, detail=f"Invalid memory target '{target}'")
+
+
+def _memory_provider_info() -> tuple[str, str]:
+    config = load_config()
+    memory_cfg = config.get("memory", {}) if isinstance(config.get("memory"), dict) else {}
+    provider = str(memory_cfg.get("provider", "") or "")
+    provider_label = provider or "built-in only"
+    return provider, provider_label
+
+
+def _build_memory_store_payload(target: str) -> dict:
+    entries = load_memory_entries(target)
+    path = _memory_file_path(target)
+    updated_at = None
+    if path.exists():
+        try:
+            updated_at = int(path.stat().st_mtime)
+        except OSError:
+            updated_at = None
+
+    return {
+        "path": str(path),
+        "entry_count": len(entries),
+        "char_count": memory_char_count(entries),
+        "char_limit": memory_char_limit(target),
+        "updated_at": updated_at,
+        "entries": [
+            {"id": memory_entry_id(target, content), "index": idx, "content": content}
+            for idx, content in enumerate(entries)
+        ],
+    }
+
+
+def _build_memory_response() -> dict:
+    provider, provider_label = _memory_provider_info()
+    return {
+        "builtin_active": True,
+        "provider": provider,
+        "provider_label": provider_label,
+        "directory": str(get_memory_dir()),
+        "note": "Saved immediately. Changes apply to future sessions; current sessions keep their existing snapshot.",
+        "stores": {
+            "user": _build_memory_store_payload("user"),
+            "memory": _build_memory_store_payload("memory"),
+        },
+    }
 
 
 @app.get("/api/status")
@@ -473,6 +542,54 @@ async def get_status():
         "gateway_updated_at": gateway_updated_at,
         "active_sessions": active_sessions,
     }
+
+
+@app.get("/api/memory")
+async def get_memory():
+    return _build_memory_response()
+
+
+@app.post("/api/memory/{target}/entries")
+async def add_memory_entry(target: str, body: MemoryEntryCreate):
+    if target not in ("memory", "user"):
+        raise HTTPException(status_code=400, detail=f"Invalid memory target '{target}'")
+
+    store = MemoryStore()
+    store.load_from_disk()
+    result = store.add(target, body.content)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Failed to add memory entry.")
+    return _build_memory_response()
+
+
+@app.put("/api/memory/{target}/entries/{entry_id}")
+async def update_memory_entry(target: str, entry_id: str, body: MemoryEntryUpdate):
+    if target not in ("memory", "user"):
+        raise HTTPException(status_code=400, detail=f"Invalid memory target '{target}'")
+
+    store = MemoryStore()
+    store.load_from_disk()
+    result = store.replace_entry_id(target, urllib.parse.unquote(entry_id), body.content)
+    if not result.get("success"):
+        error_type = result.get("error_type")
+        status = 404 if error_type == "not_found" else 400
+        raise HTTPException(status_code=status, detail=result.get("error") or "Failed to update memory entry.")
+    return _build_memory_response()
+
+
+@app.delete("/api/memory/{target}/entries/{entry_id}")
+async def delete_memory_entry(target: str, entry_id: str):
+    if target not in ("memory", "user"):
+        raise HTTPException(status_code=400, detail=f"Invalid memory target '{target}'")
+
+    store = MemoryStore()
+    store.load_from_disk()
+    result = store.remove_entry_id(target, urllib.parse.unquote(entry_id))
+    if not result.get("success"):
+        error_type = result.get("error_type")
+        status = 404 if error_type == "not_found" else 400
+        raise HTTPException(status_code=status, detail=result.get("error") or "Failed to delete memory entry.")
+    return _build_memory_response()
 
 
 @app.get("/api/sessions")

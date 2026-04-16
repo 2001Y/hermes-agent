@@ -56,6 +56,7 @@ export interface Translations {
     };
     nav: {
       status: string;
+      memory: string;
       sessions: string;
       analytics: string;
       logs: string;
@@ -64,6 +65,28 @@ export interface Translations {
       config: string;
       keys: string;
     };
+  };
+
+  // ── Memory page ──
+  memory: {
+    title: string;
+    userProfile: string;
+    notes: string;
+    builtInOnly: string;
+    provider: string;
+    builtIn: string;
+    directory: string;
+    refresh: string;
+    snapshotNote: string;
+    addEntry: string;
+    emptyStore: string;
+    entryCount: string;
+    chars: string;
+    edit: string;
+    delete: string;
+    saveFailed: string;
+    addFailed: string;
+    deleteFailed: string;
   };
 
   // ── Status page ──
