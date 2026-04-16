@@ -9,6 +9,7 @@ export function Select({
   className,
   id,
   disabled,
+  ariaLabel,
 }: SelectProps) {
   const [open, setOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -81,10 +82,12 @@ export function Select({
   };
 
   return (
-    <div ref={containerRef} className={cn("relative", className)} id={id}>
+    <div ref={containerRef} className={cn("relative", className)}>
       <button
+        id={id}
         type="button"
         role="combobox"
+        aria-label={ariaLabel}
         aria-expanded={open}
         aria-haspopup="listbox"
         disabled={disabled}
@@ -154,7 +157,8 @@ export function Select({
   );
 }
 
-export function SelectOption(_props: SelectOptionProps) {
+export function SelectOption(props: SelectOptionProps) {
+  void props;
   return null;
 }
 
@@ -181,6 +185,7 @@ interface SelectProps {
   className?: string;
   id?: string;
   disabled?: boolean;
+  ariaLabel?: string;
 }
 
 interface SelectOptionProps {

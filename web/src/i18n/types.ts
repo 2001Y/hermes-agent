@@ -76,8 +76,8 @@ export interface Translations {
     provider: string;
     builtIn: string;
     directory: string;
+    target: string;
     refresh: string;
-    snapshotNote: string;
     addEntry: string;
     emptyStore: string;
     entryCount: string;

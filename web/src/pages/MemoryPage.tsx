@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectOption } from "@/components/ui/select";
 import { useToast } from "@/hooks/useToast";
 import { useI18n } from "@/i18n";
 
@@ -27,7 +29,6 @@ function StoreSection({
   editingId,
   drafts,
   savingKey,
-  composerValue,
   searchValue,
   onSearchChange,
   onToggle,
@@ -35,8 +36,6 @@ function StoreSection({
   onDraftChange,
   onSaveEdit,
   onDelete,
-  onComposerChange,
-  onAdd,
   t,
 }: {
   target: "memory" | "user";
@@ -47,7 +46,6 @@ function StoreSection({
   editingId: string | null;
   drafts: Record<string, string>;
   savingKey: string | null;
-  composerValue: string;
   searchValue: string;
   onSearchChange: (target: "memory" | "user", value: string) => void;
   onToggle: (id: string) => void;
@@ -55,8 +53,6 @@ function StoreSection({
   onDraftChange: (id: string, value: string) => void;
   onSaveEdit: (id: string) => void;
   onDelete: (id: string) => void;
-  onComposerChange: (target: "memory" | "user", value: string) => void;
-  onAdd: (target: "memory" | "user") => void;
   t: ReturnType<typeof useI18n>["t"];
 }) {
   const normalizedSearch = searchValue.trim().toLowerCase();
@@ -168,22 +164,6 @@ function StoreSection({
             );
           })
         )}
-
-        <div className="border border-border p-4 grid gap-2">
-          <span className="text-sm font-medium">{t.memory.addEntry}</span>
-          <textarea
-            aria-label={`${title} ${t.memory.addEntry}`}
-            className="flex min-h-[120px] w-full border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-courier leading-relaxed"
-            value={composerValue}
-            onChange={(e) => onComposerChange(target, e.target.value)}
-          />
-          <div>
-            <Button size="sm" onClick={() => onAdd(target)} disabled={savingKey === `${target}:new` || !composerValue.trim()} className="gap-1.5">
-              <Save className="h-3.5 w-3.5" />
-              {savingKey === `${target}:new` ? t.common.saving : t.memory.addEntry}
-            </Button>
-          </div>
-        </div>
       </CardContent>
     </Card>
   );
@@ -196,7 +176,8 @@ export default function MemoryPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [composer, setComposer] = useState<{ memory: string; user: string }>({ memory: "", user: "" });
+  const [newEntry, setNewEntry] = useState("");
+  const [newEntryTarget, setNewEntryTarget] = useState<"user" | "memory">("user");
   const [search, setSearch] = useState<{ memory: string; user: string }>({ memory: "", user: "" });
   const { toast, showToast } = useToast();
   const { t } = useI18n();
@@ -250,12 +231,12 @@ export default function MemoryPage() {
     }
   };
 
-  const handleAdd = async (target: "memory" | "user") => {
-    setSavingKey(`${target}:new`);
+  const handleAdd = async () => {
+    setSavingKey("new-entry");
     try {
-      const next = await api.addMemoryEntry(target, composer[target]);
+      const next = await api.addMemoryEntry(newEntryTarget, newEntry);
       setData(next);
-      setComposer((current) => ({ ...current, [target]: "" }));
+      setNewEntry("");
     } catch (error) {
       showToast(`${t.memory.addFailed}: ${error}`, "error");
     } finally {
@@ -298,9 +279,43 @@ export default function MemoryPage() {
         </Button>
       </div>
 
-      <div className="border border-warning/30 bg-warning/10 p-4 text-sm text-warning">
-        {data.note || t.memory.snapshotNote}
-      </div>
+      <Card>
+        <CardHeader className="py-3 px-4">
+          <CardTitle className="text-sm">{t.memory.addEntry}</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 px-4 pb-4">
+          <div className="grid gap-2">
+            <Label htmlFor="memory-new-entry">{t.memory.addEntry}</Label>
+            <textarea
+              id="memory-new-entry"
+              aria-label={`${t.memory.title} ${t.memory.addEntry}`}
+              className="flex min-h-[120px] w-full border border-input bg-transparent px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-courier leading-relaxed"
+              value={newEntry}
+              onChange={(e) => setNewEntry(e.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,220px)_auto] gap-4 sm:items-end">
+            <div className="grid gap-2">
+              <Label htmlFor="memory-target-select">{t.memory.target}</Label>
+              <Select
+                id="memory-target-select"
+                ariaLabel={`${t.memory.title} ${t.memory.target}`}
+                value={newEntryTarget}
+                onValueChange={(value) => setNewEntryTarget(value as "user" | "memory")}
+              >
+                <SelectOption value="user">{t.memory.userProfile}</SelectOption>
+                <SelectOption value="memory">{t.memory.notes}</SelectOption>
+              </Select>
+            </div>
+            <div>
+              <Button size="sm" onClick={() => void handleAdd()} disabled={savingKey === "new-entry" || !newEntry.trim()} className="gap-1.5 w-full sm:w-auto">
+                <Save className="h-3.5 w-3.5" />
+                {savingKey === "new-entry" ? t.common.saving : t.memory.addEntry}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <StoreSection
         target="user"
@@ -311,7 +326,6 @@ export default function MemoryPage() {
         editingId={editingId}
         drafts={drafts}
         savingKey={savingKey}
-        composerValue={composer.user}
         searchValue={search.user}
         onSearchChange={(target, value) => setSearch((current) => ({ ...current, [target]: value }))}
         onToggle={(id) => setExpandedId((current) => (current === id ? null : id))}
@@ -323,8 +337,6 @@ export default function MemoryPage() {
         onDraftChange={(id, value) => setDrafts((current) => ({ ...current, [id]: value }))}
         onSaveEdit={(id) => void handleSaveEdit(id)}
         onDelete={(id) => void handleDelete(id)}
-        onComposerChange={(target, value) => setComposer((current) => ({ ...current, [target]: value }))}
-        onAdd={(target) => void handleAdd(target)}
         t={t}
       />
 
@@ -337,7 +349,6 @@ export default function MemoryPage() {
         editingId={editingId}
         drafts={drafts}
         savingKey={savingKey}
-        composerValue={composer.memory}
         searchValue={search.memory}
         onSearchChange={(target, value) => setSearch((current) => ({ ...current, [target]: value }))}
         onToggle={(id) => setExpandedId((current) => (current === id ? null : id))}
@@ -349,8 +360,6 @@ export default function MemoryPage() {
         onDraftChange={(id, value) => setDrafts((current) => ({ ...current, [id]: value }))}
         onSaveEdit={(id) => void handleSaveEdit(id)}
         onDelete={(id) => void handleDelete(id)}
-        onComposerChange={(target, value) => setComposer((current) => ({ ...current, [target]: value }))}
-        onAdd={(target) => void handleAdd(target)}
         t={t}
       />
     </div>
