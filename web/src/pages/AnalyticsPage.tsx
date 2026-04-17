@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { AnalyticsResponse, AnalyticsDailyEntry, AnalyticsModelEntry } from "@/lib/api";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n";
@@ -227,6 +228,69 @@ function ModelTable({ models }: { models: AnalyticsModelEntry[] }) {
   );
 }
 
+function ProviderMonthlyUsageSection({ data }: { data: AnalyticsResponse["provider_monthly_usage"] }) {
+  return (
+    <Card data-testid="provider-monthly-usage">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <BarChart3 className="h-5 w-5 text-muted-foreground" />
+          <CardTitle className="text-base">Provider Monthly Usage</CardTitle>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Provider-managed monthly usage and billing snapshots. Units are displayed as returned by each provider.
+        </p>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {data.sources.length === 0 ? (
+          <div className="border border-border p-4 text-sm text-muted-foreground text-center">
+            No provider monthly usage available.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground text-xs">
+                  <th className="text-left py-2 pr-4 font-medium">Provider</th>
+                  <th className="text-left py-2 px-4 font-medium">Scope</th>
+                  <th className="text-left py-2 px-4 font-medium">Unit</th>
+                  <th className="text-right py-2 px-4 font-medium">Value</th>
+                  <th className="text-left py-2 pl-4 font-medium">Period</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.sources.map((entry) => (
+                  <tr key={entry.provider} className="border-b border-border/50 hover:bg-secondary/20 transition-colors">
+                    <td className="py-2 pr-4 font-mono-ui text-xs">{entry.provider}</td>
+                    <td className="py-2 px-4"><Badge variant="outline">{entry.scope}</Badge></td>
+                    <td className="py-2 px-4"><Badge variant="secondary">{entry.unit}</Badge></td>
+                    <td className="text-right py-2 px-4 font-medium">{entry.value}</td>
+                    <td className="py-2 pl-4 text-xs text-muted-foreground">
+                      {entry.period.start} → {entry.period.end}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="grid gap-2">
+          <h3 className="text-sm font-medium text-muted-foreground">Unsupported providers</h3>
+          {data.unsupported.length === 0 ? (
+            <div className="text-sm text-muted-foreground">None</div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {data.unsupported.map((entry) => (
+                <Badge key={entry.provider} variant="outline">{entry.provider}</Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AnalyticsPage() {
   const [days, setDays] = useState(30);
   const [data, setData] = useState<AnalyticsResponse | null>(null);
@@ -308,6 +372,7 @@ export default function AnalyticsPage() {
           <TokenBarChart daily={data.daily} />
 
           {/* Tables */}
+          <ProviderMonthlyUsageSection data={data.provider_monthly_usage} />
           <DailyTable daily={data.daily} />
           <ModelTable models={data.by_model} />
         </>

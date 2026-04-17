@@ -692,8 +692,59 @@ class TestNewEndpoints:
         assert "daily" in data
         assert "by_model" in data
         assert "totals" in data
+        assert "provider_monthly_usage" in data
         assert isinstance(data["daily"], list)
         assert "total_sessions" in data["totals"]
+
+    def test_analytics_usage_includes_provider_monthly_usage(self, monkeypatch):
+        monkeypatch.setattr(
+            "hermes_cli.web_server.get_supported_provider_monthly_usage",
+            lambda now=None: {
+                "sources": [
+                    {
+                        "provider": "tavily",
+                        "status": "supported",
+                        "scope": "api_key",
+                        "unit": "usage",
+                        "value": 150,
+                        "period": {
+                            "kind": "calendar_month",
+                            "start": "2026-04-01T00:00:00Z",
+                            "end": "2026-04-30T23:59:59Z",
+                        },
+                        "breakdown": {"search_usage": 100, "extract_usage": 25},
+                        "fetched_at": 1710000000.0,
+                        "source": "provider_usage_api",
+                    }
+                ],
+                "unsupported": [{"provider": "parallel", "reason": "no_documented_usage_api"}],
+            },
+        )
+        monkeypatch.setattr("hermes_cli.web_server.time.time", lambda: 1710000000.0)
+
+        resp = self.client.get("/api/analytics/usage?days=7")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["provider_monthly_usage"] == {
+            "sources": [
+                {
+                    "provider": "tavily",
+                    "status": "supported",
+                    "scope": "api_key",
+                    "unit": "usage",
+                    "value": 150,
+                    "period": {
+                        "kind": "calendar_month",
+                        "start": "2026-04-01T00:00:00Z",
+                        "end": "2026-04-30T23:59:59Z",
+                    },
+                    "breakdown": {"search_usage": 100, "extract_usage": 25},
+                    "fetched_at": 1710000000.0,
+                    "source": "provider_usage_api",
+                }
+            ],
+            "unsupported": [{"provider": "parallel", "reason": "no_documented_usage_api"}],
+        }
 
     def test_session_token_endpoint_removed(self):
         """GET /api/auth/session-token no longer exists."""

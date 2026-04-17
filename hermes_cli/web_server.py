@@ -46,6 +46,7 @@ from hermes_cli.config import (
     redact_key,
 )
 from gateway.status import get_running_pid, read_runtime_status
+from agent.tool_billing import get_supported_provider_monthly_usage
 
 try:
     from fastapi import FastAPI, HTTPException, Request
@@ -1997,8 +1998,15 @@ async def get_usage_analytics(days: int = 30):
             FROM sessions WHERE started_at > ?
         """, (cutoff,))
         totals = dict(cur3.fetchone())
+        provider_monthly_usage = get_supported_provider_monthly_usage(now=time.time())
 
-        return {"daily": daily, "by_model": by_model, "totals": totals, "period_days": days}
+        return {
+            "daily": daily,
+            "by_model": by_model,
+            "totals": totals,
+            "provider_monthly_usage": provider_monthly_usage,
+            "period_days": days,
+        }
     finally:
         db.close()
 

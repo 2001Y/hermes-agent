@@ -300,6 +300,27 @@ export interface AnalyticsModelEntry {
   sessions: number;
 }
 
+export interface ProviderMonthlyUsageEntry {
+  provider: string;
+  status: string;
+  scope: string;
+  unit: string;
+  value: number;
+  period: {
+    kind: string;
+    start: string | null;
+    end: string | null;
+  };
+  breakdown?: Record<string, unknown> | null;
+  fetched_at: number;
+  source: string;
+}
+
+export interface ProviderMonthlyUsageUnsupportedEntry {
+  provider: string;
+  reason: string;
+}
+
 export interface AnalyticsResponse {
   daily: AnalyticsDailyEntry[];
   by_model: AnalyticsModelEntry[];
@@ -311,6 +332,10 @@ export interface AnalyticsResponse {
     total_estimated_cost: number;
     total_actual_cost: number;
     total_sessions: number;
+  };
+  provider_monthly_usage: {
+    sources: ProviderMonthlyUsageEntry[];
+    unsupported: ProviderMonthlyUsageUnsupportedEntry[];
   };
 }
 
