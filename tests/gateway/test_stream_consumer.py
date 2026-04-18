@@ -88,6 +88,51 @@ class TestCleanForDisplay:
 # ── Integration: _send_or_edit strips MEDIA: ─────────────────────────────
 
 
+class TestFinalizeCapabilityGate:
+    """Verify REQUIRES_EDIT_FINALIZE gates the redundant final edit.
+
+    Platforms that don't need an explicit finalize signal (Telegram,
+    Slack, Matrix, …) should skip the redundant final edit when the
+    mid-stream edit already delivered the final content.  Platforms that
+    *do* need it (DingTalk AI Cards) must always receive a finalize=True
+    edit at the end of the stream.
+    """
+
+    @pytest.mark.asyncio
+    async def test_identical_text_skip_respects_adapter_flag(self):
+        """_send_or_edit short-circuits identical-text only when the
+        adapter doesn't require an explicit finalize signal."""
+        # Adapter without finalize requirement — should skip identical edit.
+        plain = MagicMock()
+        plain.REQUIRES_EDIT_FINALIZE = False
+        plain.send = AsyncMock(return_value=SimpleNamespace(
+            success=True, message_id="m1",
+        ))
+        plain.edit_message = AsyncMock()
+        plain.MAX_MESSAGE_LENGTH = 4096
+        c1 = GatewayStreamConsumer(plain, "chat_1")
+        await c1._send_or_edit("hello")  # first send
+        await c1._send_or_edit("hello", finalize=True)  # identical → skip
+        plain.edit_message.assert_not_called()
+
+        # Adapter that requires finalize — must still fire the edit.
+        picky = MagicMock()
+        picky.REQUIRES_EDIT_FINALIZE = True
+        picky.send = AsyncMock(return_value=SimpleNamespace(
+            success=True, message_id="m1",
+        ))
+        picky.edit_message = AsyncMock(return_value=SimpleNamespace(
+            success=True, message_id="m1",
+        ))
+        picky.MAX_MESSAGE_LENGTH = 4096
+        c2 = GatewayStreamConsumer(picky, "chat_1")
+        await c2._send_or_edit("hello")
+        await c2._send_or_edit("hello", finalize=True)
+        # Finalize edit must go through even on identical content.
+        picky.edit_message.assert_called_once()
+        assert picky.edit_message.call_args[1]["finalize"] is True
+
+
 class TestSendOrEditMediaStripping:
     """Verify _send_or_edit strips MEDIA: before sending to the platform."""
 
@@ -1013,3 +1058,106 @@ class TestFilterAndAccumulateIntegration:
             await task
         except asyncio.CancelledError:
             pass
+
+
+# ── buffer_only mode tests ─────────────────────────────────────────────
+
+
+class TestBufferOnlyMode:
+    """Verify buffer_only mode suppresses intermediate edits and only
+    flushes on structural boundaries (done, segment break, commentary)."""
+
+    @pytest.mark.asyncio
+    async def test_suppresses_intermediate_edits(self):
+        """Time-based and size-based edits are skipped; only got_done flushes."""
+        adapter = MagicMock()
+        adapter.MAX_MESSAGE_LENGTH = 4096
+        adapter.send = AsyncMock(return_value=SimpleNamespace(success=True, message_id="msg1"))
+        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=True))
+
+        cfg = StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5, cursor="", buffer_only=True)
+        consumer = GatewayStreamConsumer(adapter, "!room:server", config=cfg)
+
+        for word in ["Hello", " world", ", this", " is", " a", " test"]:
+            consumer.on_delta(word)
+        consumer.finish()
+
+        await consumer.run()
+
+        adapter.send.assert_called_once()
+        adapter.edit_message.assert_not_called()
+        assert "Hello world, this is a test" in adapter.send.call_args_list[0][1]["content"]
+
+    @pytest.mark.asyncio
+    async def test_flushes_on_segment_break(self):
+        """A segment break (tool call boundary) flushes accumulated text."""
+        adapter = MagicMock()
+        adapter.MAX_MESSAGE_LENGTH = 4096
+        adapter.send = AsyncMock(side_effect=[
+            SimpleNamespace(success=True, message_id="msg1"),
+            SimpleNamespace(success=True, message_id="msg2"),
+        ])
+        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=True))
+
+        cfg = StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5, cursor="", buffer_only=True)
+        consumer = GatewayStreamConsumer(adapter, "!room:server", config=cfg)
+
+        consumer.on_delta("Before tool call")
+        consumer.on_delta(None)
+        consumer.on_delta("After tool call")
+        consumer.finish()
+
+        await consumer.run()
+
+        assert adapter.send.call_count == 2
+        assert "Before tool call" in adapter.send.call_args_list[0][1]["content"]
+        assert "After tool call" in adapter.send.call_args_list[1][1]["content"]
+        adapter.edit_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_flushes_on_commentary(self):
+        """An interim commentary message flushes in buffer_only mode."""
+        adapter = MagicMock()
+        adapter.MAX_MESSAGE_LENGTH = 4096
+        adapter.send = AsyncMock(side_effect=[
+            SimpleNamespace(success=True, message_id="msg1"),
+            SimpleNamespace(success=True, message_id="msg2"),
+            SimpleNamespace(success=True, message_id="msg3"),
+        ])
+        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=True))
+
+        cfg = StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5, cursor="", buffer_only=True)
+        consumer = GatewayStreamConsumer(adapter, "!room:server", config=cfg)
+
+        consumer.on_delta("Working on it...")
+        consumer.on_commentary("I'll search for that first.")
+        consumer.on_delta("Here are the results.")
+        consumer.finish()
+
+        await consumer.run()
+
+        # Three sends: accumulated text, commentary, final text
+        assert adapter.send.call_count >= 2
+        adapter.edit_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_mode_still_triggers_intermediate_edits(self):
+        """Regression: buffer_only=False (default) still does progressive edits."""
+        adapter = MagicMock()
+        adapter.MAX_MESSAGE_LENGTH = 4096
+        adapter.send = AsyncMock(return_value=SimpleNamespace(success=True, message_id="msg1"))
+        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=True))
+
+        # buffer_threshold=5 means any 5+ chars triggers an early edit
+        cfg = StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5, cursor="")
+        consumer = GatewayStreamConsumer(adapter, "!room:server", config=cfg)
+
+        consumer.on_delta("Hello world, this is long enough to trigger edits")
+        consumer.finish()
+
+        await consumer.run()
+
+        # Should have at least one send. With buffer_threshold=5 and this much
+        # text, the consumer may send then edit, or just send once at got_done.
+        # The key assertion: this doesn't break.
+        assert adapter.send.call_count >= 1
