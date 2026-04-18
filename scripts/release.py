@@ -207,6 +207,7 @@ AUTHOR_MAP = {
     "cola-runner@users.noreply.github.com": "cola-runner",
     "ygd58@users.noreply.github.com": "ygd58",
     "vominh1919@users.noreply.github.com": "vominh1919",
+    "iamagenius00@users.noreply.github.com": "iamagenius00",
     "trevmanthony@gmail.com": "trevthefoolish",
     "ziliangpeng@users.noreply.github.com": "ziliangpeng",
     "centripetal-star@users.noreply.github.com": "centripetal-star",
@@ -262,6 +263,7 @@ AUTHOR_MAP = {
     "xiayh17@gmail.com": "xiayh0107",
     "asurla@nvidia.com": "anniesurla",
     "limkuan24@gmail.com": "WideLee",
+    "aviralarora002@gmail.com": "AviArora02-commits",
 }
 
 
