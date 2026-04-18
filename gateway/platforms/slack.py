@@ -11,6 +11,7 @@ Uses slack-bolt (Python) with Socket Mode for:
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import re
 import time
@@ -1120,54 +1121,34 @@ class SlackAdapter(BasePlatformAdapter):
                 except Exception as e:  # pragma: no cover - defensive logging
                     logger.warning("[Slack] Failed to cache audio from %s: %s", url, e, exc_info=True)
             elif url:
-                # Try to handle as a document attachment
+                # Handle generic file attachments as documents, not just a small allowlist.
                 try:
-                    original_filename = f.get("name", "")
+                    original_filename = str(f.get("name") or "").strip()
                     ext = ""
                     if original_filename:
                         _, ext = os.path.splitext(original_filename)
                         ext = ext.lower()
 
-                    # Fallback: reverse-lookup from MIME type
-                    if not ext and mimetype:
-                        mime_to_ext = {v: k for k, v in SUPPORTED_DOCUMENT_TYPES.items()}
-                        ext = mime_to_ext.get(mimetype, "")
+                    normalized_mimetype = str(mimetype or "").split(";", 1)[0].strip().lower()
+                    if not ext and normalized_mimetype:
+                        ext = mimetypes.guess_extension(normalized_mimetype, strict=False) or ""
 
-                    if ext not in SUPPORTED_DOCUMENT_TYPES:
-                        continue  # Skip unsupported file types silently
+                    if not original_filename:
+                        original_filename = f"document{ext or '.bin'}"
 
-                    # Check file size (Slack limit: 20 MB for bots)
-                    file_size = f.get("size", 0)
-                    MAX_DOC_BYTES = 20 * 1024 * 1024
-                    if not file_size or file_size > MAX_DOC_BYTES:
-                        logger.warning("[Slack] Document too large or unknown size: %s", file_size)
-                        continue
-
-                    # Download and cache
-                    raw_bytes = await self._download_slack_file_bytes(url, team_id=team_id)
-                    cached_path = cache_document_from_bytes(
-                        raw_bytes, original_filename or f"document{ext}"
+                    doc_mime = (
+                        normalized_mimetype
+                        or SUPPORTED_DOCUMENT_TYPES.get(ext)
+                        or mimetypes.guess_type(original_filename, strict=False)[0]
+                        or "application/octet-stream"
                     )
-                    doc_mime = SUPPORTED_DOCUMENT_TYPES[ext]
+
+                    raw_bytes = await self._download_slack_file_bytes(url, team_id=team_id)
+                    cached_path = cache_document_from_bytes(raw_bytes, original_filename)
                     media_urls.append(cached_path)
                     media_types.append(doc_mime)
                     msg_type = MessageType.DOCUMENT
                     logger.debug("[Slack] Cached user document: %s", cached_path)
-
-                    # Inject text content for .txt/.md files (capped at 100 KB)
-                    MAX_TEXT_INJECT_BYTES = 100 * 1024
-                    if ext in (".md", ".txt") and len(raw_bytes) <= MAX_TEXT_INJECT_BYTES:
-                        try:
-                            text_content = raw_bytes.decode("utf-8")
-                            display_name = original_filename or f"document{ext}"
-                            display_name = re.sub(r'[^\w.\- ]', '_', display_name)
-                            injection = f"[Content of {display_name}]:\n{text_content}"
-                            if text:
-                                text = f"{injection}\n\n{text}"
-                            else:
-                                text = injection
-                        except UnicodeDecodeError:
-                            pass  # Binary content, skip injection
 
                 except Exception as e:  # pragma: no cover - defensive logging
                     logger.warning("[Slack] Failed to cache document from %s: %s", url, e, exc_info=True)

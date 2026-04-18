@@ -350,8 +350,8 @@ class TestIncomingDocumentHandling:
         assert msg_event.media_types == ["application/pdf"]
 
     @pytest.mark.asyncio
-    async def test_txt_document_injects_content(self, adapter):
-        """A .txt file under 100KB should have its content injected into event text."""
+    async def test_txt_document_is_cached_without_text_injection(self, adapter):
+        """A .txt file should be cached without mutating the user text."""
         content = b"Hello from a text file"
 
         with patch.object(adapter, "_download_slack_file_bytes", new_callable=AsyncMock) as dl:
@@ -368,13 +368,14 @@ class TestIncomingDocumentHandling:
             await adapter._handle_slack_message(event)
 
         msg_event = adapter.handle_message.call_args[0][0]
-        assert "Hello from a text file" in msg_event.text
-        assert "[Content of notes.txt]" in msg_event.text
-        assert "summarize this" in msg_event.text
+        assert msg_event.text == "summarize this"
+        assert len(msg_event.media_urls) == 1
+        assert os.path.exists(msg_event.media_urls[0])
+        assert msg_event.media_types == ["text/plain"]
 
     @pytest.mark.asyncio
-    async def test_md_document_injects_content(self, adapter):
-        """A .md file under 100KB should have its content injected."""
+    async def test_markdown_document_is_cached_without_text_injection(self, adapter):
+        """A .md file should be cached without inlining its contents into text."""
         content = b"# Title\nSome markdown content"
 
         with patch.object(adapter, "_download_slack_file_bytes", new_callable=AsyncMock) as dl:
@@ -388,11 +389,13 @@ class TestIncomingDocumentHandling:
             await adapter._handle_slack_message(event)
 
         msg_event = adapter.handle_message.call_args[0][0]
-        assert "# Title" in msg_event.text
+        assert msg_event.text == ""
+        assert len(msg_event.media_urls) == 1
+        assert msg_event.media_types == ["text/markdown"]
 
     @pytest.mark.asyncio
-    async def test_large_txt_not_injected(self, adapter):
-        """A .txt file over 100KB should be cached but NOT injected."""
+    async def test_large_document_is_cached_without_size_gate(self, adapter):
+        """Slack-provided large documents should still be cached when downloadable."""
         content = b"x" * (200 * 1024)
 
         with patch.object(adapter, "_download_slack_file_bytes", new_callable=AsyncMock) as dl:
@@ -407,7 +410,8 @@ class TestIncomingDocumentHandling:
 
         msg_event = adapter.handle_message.call_args[0][0]
         assert len(msg_event.media_urls) == 1
-        assert "[Content of" not in (msg_event.text or "")
+        assert os.path.exists(msg_event.media_urls[0])
+        assert msg_event.media_types == ["text/plain"]
 
     @pytest.mark.asyncio
     async def test_zip_file_cached(self, adapter):
@@ -426,6 +430,50 @@ class TestIncomingDocumentHandling:
         assert msg_event.message_type == MessageType.DOCUMENT
         assert len(msg_event.media_urls) == 1
         assert msg_event.media_types == ["application/zip"]
+
+    @pytest.mark.asyncio
+    async def test_har_file_cached_even_if_extension_not_allowlisted(self, adapter):
+        """A .har attachment should still be cached as a document."""
+        har_bytes = b'{"log":{"version":"1.2"}}'
+
+        with patch.object(adapter, "_download_slack_file_bytes", new_callable=AsyncMock) as dl:
+            dl.return_value = har_bytes
+            event = self._make_event(files=[{
+                "mimetype": "application/json",
+                "name": "www.mobile.pasmo.jp.har",
+                "url_private_download": "https://files.slack.com/session.har",
+                "size": len(har_bytes),
+            }])
+            await adapter._handle_slack_message(event)
+
+        msg_event = adapter.handle_message.call_args[0][0]
+        assert msg_event.message_type == MessageType.DOCUMENT
+        assert len(msg_event.media_urls) == 1
+        assert os.path.exists(msg_event.media_urls[0])
+        assert msg_event.media_types == ["application/json"]
+        assert msg_event.media_urls[0].endswith("www.mobile.pasmo.jp.har")
+
+    @pytest.mark.asyncio
+    async def test_unknown_binary_file_cached_with_octet_stream_fallback(self, adapter):
+        """Unknown file extensions should still be cached instead of being dropped."""
+        blob = b"\x00\x01\x02custom-binary"
+
+        with patch.object(adapter, "_download_slack_file_bytes", new_callable=AsyncMock) as dl:
+            dl.return_value = blob
+            event = self._make_event(files=[{
+                "mimetype": "application/octet-stream",
+                "name": "capture.unknownext",
+                "url_private_download": "https://files.slack.com/capture.unknownext",
+                "size": len(blob),
+            }])
+            await adapter._handle_slack_message(event)
+
+        msg_event = adapter.handle_message.call_args[0][0]
+        assert msg_event.message_type == MessageType.DOCUMENT
+        assert len(msg_event.media_urls) == 1
+        assert os.path.exists(msg_event.media_urls[0])
+        assert msg_event.media_types == ["application/octet-stream"]
+        assert msg_event.media_urls[0].endswith("capture.unknownext")
 
     @pytest.mark.asyncio
     async def test_oversized_document_skipped(self, adapter):
