@@ -295,10 +295,11 @@ class TestLaunchdPlistRefresh:
 
         gateway_cli.launchd_start()
 
-        # First calls should be refresh (bootout/bootstrap), then kickstart
+        # First calls should be refresh (bootout/bootstrap); no extra kickstart
+        # is needed because bootstrap loads the RunAtLoad job immediately.
         cmd_strs = [" ".join(c) for c in calls]
         assert any("bootout" in s for s in cmd_strs)
-        assert any("kickstart" in s for s in cmd_strs)
+        assert not any("kickstart" in s for s in cmd_strs)
 
     def test_launchd_start_recreates_missing_plist_and_loads_service(self, tmp_path, monkeypatch):
         """launchd_start self-heals when the plist file is missing entirely."""
@@ -321,9 +322,9 @@ class TestLaunchdPlistRefresh:
         assert "--replace" in plist_path.read_text()
 
         cmd_strs = [" ".join(c) for c in calls]
-        # Should bootstrap the new plist, then kickstart
+        # Should bootstrap the new plist and let RunAtLoad start it.
         assert any("bootstrap" in s for s in cmd_strs)
-        assert any("kickstart" in s for s in cmd_strs)
+        assert not any("kickstart" in s for s in cmd_strs)
         # Should NOT call bootout (nothing to bootout)
         assert not any("bootout" in s for s in cmd_strs)
 
