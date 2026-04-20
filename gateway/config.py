@@ -608,6 +608,10 @@ def load_gateway_config() -> GatewayConfig:
                     if isinstance(frc, list):
                         frc = ",".join(str(v) for v in frc)
                     os.environ["SLACK_FREE_RESPONSE_CHANNELS"] = str(frc)
+                if "mention_on_approval_required" in slack_cfg and not os.getenv("SLACK_MENTION_ON_APPROVAL_REQUIRED"):
+                    os.environ["SLACK_MENTION_ON_APPROVAL_REQUIRED"] = str(slack_cfg["mention_on_approval_required"]).lower()
+                if "mention_on_completion" in slack_cfg and not os.getenv("SLACK_MENTION_ON_COMPLETION"):
+                    os.environ["SLACK_MENTION_ON_COMPLETION"] = str(slack_cfg["mention_on_completion"]).lower()
 
             # Discord settings → env vars (env vars take precedence)
             discord_cfg = yaml_cfg.get("discord", {})

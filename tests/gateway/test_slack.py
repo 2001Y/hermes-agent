@@ -1535,6 +1535,45 @@ class TestReplyBroadcast:
         assert kwargs.get("reply_broadcast") is True
 
 
+class TestUserMentions:
+    """Slack-specific mention prefix behavior for important notifications."""
+
+    @pytest.mark.asyncio
+    async def test_send_exec_approval_mentions_requesting_user_when_enabled(self, adapter):
+        adapter.config.extra["mention_on_approval_required"] = True
+        adapter._app.client.chat_postMessage = AsyncMock(return_value={"ts": "1234.5678"})
+
+        result = await adapter.send_exec_approval(
+            chat_id="C123",
+            command="rm -rf /important",
+            session_key="agent:main:slack:group:C123:1111",
+            description="dangerous deletion",
+            metadata={"user_id": "U_REQUESTER"},
+        )
+
+        assert result.success is True
+        kwargs = adapter._app.client.chat_postMessage.call_args.kwargs
+        assert kwargs["text"].startswith("<@U_REQUESTER> ")
+        assert "Command approval required" in kwargs["text"]
+        assert kwargs["blocks"][0]["text"]["text"].startswith("<@U_REQUESTER>\n")
+
+    @pytest.mark.asyncio
+    async def test_send_exec_approval_skips_mention_when_disabled(self, adapter):
+        adapter._app.client.chat_postMessage = AsyncMock(return_value={"ts": "1234.5678"})
+
+        await adapter.send_exec_approval(
+            chat_id="C123",
+            command="rm -rf /important",
+            session_key="agent:main:slack:group:C123:1111",
+            description="dangerous deletion",
+            metadata={"user_id": "U_REQUESTER"},
+        )
+
+        kwargs = adapter._app.client.chat_postMessage.call_args.kwargs
+        assert not kwargs["text"].startswith("<@U_REQUESTER>")
+        assert not kwargs["blocks"][0]["text"]["text"].startswith("<@U_REQUESTER>")
+
+
 # ---------------------------------------------------------------------------
 # TestFallbackPreservesThreadContext
 # ---------------------------------------------------------------------------

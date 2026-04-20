@@ -50,15 +50,19 @@ def _build_runner(monkeypatch, tmp_path, mode: str) -> GatewayRunner:
     return runner
 
 
-def _watcher_dict(session_id="proc_test", thread_id=""):
+def _watcher_dict(session_id="proc_test", thread_id="", platform="telegram", user_id="", user_name=""):
     d = {
         "session_id": session_id,
         "check_interval": 0,
-        "platform": "telegram",
+        "platform": platform,
         "chat_id": "123",
     }
     if thread_id:
         d["thread_id"] = thread_id
+    if user_id:
+        d["user_id"] = user_id
+    if user_name:
+        d["user_name"] = user_name
     return d
 
 
@@ -243,6 +247,35 @@ async def test_no_thread_id_sends_no_metadata(monkeypatch, tmp_path):
     assert adapter.send.await_count == 1
     _, kwargs = adapter.send.call_args
     assert kwargs["metadata"] is None
+
+
+@pytest.mark.asyncio
+async def test_slack_completion_notification_mentions_requesting_user(monkeypatch, tmp_path):
+    """Slack completion notifications mention the originating user when enabled."""
+    import tools.process_registry as pr_module
+    from gateway.config import PlatformConfig
+
+    sessions = [SimpleNamespace(output_buffer="done\n", exited=True, exit_code=0)]
+    monkeypatch.setattr(pr_module, "process_registry", _FakeRegistry(sessions))
+
+    async def _instant_sleep(*_a, **_kw):
+        pass
+    monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+    runner = _build_runner(monkeypatch, tmp_path, "result")
+    runner.adapters.pop(Platform.TELEGRAM)
+    slack_adapter = SimpleNamespace(send=AsyncMock(), handle_message=AsyncMock())
+    slack_adapter.config = PlatformConfig(enabled=True, extra={"mention_on_completion": True})
+    runner.adapters[Platform.SLACK] = slack_adapter
+
+    await runner._run_process_watcher(
+        _watcher_dict(platform="slack", user_id="U_REQUESTER", user_name="harusame")
+    )
+
+    slack_adapter.send.assert_awaited_once()
+    sent_text = slack_adapter.send.await_args.args[1]
+    assert sent_text.startswith("<@U_REQUESTER> ")
+    assert "finished with exit code 0" in sent_text
 
 
 @pytest.mark.asyncio

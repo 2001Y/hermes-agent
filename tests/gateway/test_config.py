@@ -299,6 +299,26 @@ class TestLoadGatewayConfig:
             "C01ABC": "Code review mode",
         }
 
+    def test_bridges_slack_mention_notification_env_vars_from_config_yaml(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".hermes"
+        hermes_home.mkdir()
+        config_path = hermes_home / "config.yaml"
+        config_path.write_text(
+            "slack:\n"
+            "  mention_on_approval_required: true\n"
+            "  mention_on_completion: true\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.delenv("SLACK_MENTION_ON_APPROVAL_REQUIRED", raising=False)
+        monkeypatch.delenv("SLACK_MENTION_ON_COMPLETION", raising=False)
+
+        load_gateway_config()
+
+        assert os.environ.get("SLACK_MENTION_ON_APPROVAL_REQUIRED") == "true"
+        assert os.environ.get("SLACK_MENTION_ON_COMPLETION") == "true"
+
     def test_invalid_quick_commands_in_config_yaml_are_ignored(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / ".hermes"
         hermes_home.mkdir()

@@ -7932,6 +7932,42 @@ class GatewayRunner:
         except Exception as e:
             logger.error("Watch notification injection error: %s", e)
 
+    def _prefix_platform_notification_mention(
+        self,
+        adapter,
+        platform_name: str,
+        message_text: str,
+        *,
+        user_id: str = "",
+        purpose: str = "",
+    ) -> str:
+        """Add platform-specific user mention prefixes for opted-in notifications."""
+        if platform_name != Platform.SLACK.value:
+            return message_text
+
+        mention_user_id = str(user_id or "").strip()
+        if not mention_user_id:
+            return message_text
+
+        extra = getattr(getattr(adapter, "config", None), "extra", {}) or {}
+        if purpose == "completion":
+            enabled = extra.get("mention_on_completion")
+            env_value = os.getenv("SLACK_MENTION_ON_COMPLETION", "")
+        else:
+            enabled = False
+            env_value = ""
+
+        if enabled is None:
+            enabled = env_value.strip().lower() in ("true", "1", "yes", "on")
+        elif isinstance(enabled, str):
+            enabled = enabled.strip().lower() in ("true", "1", "yes", "on")
+        else:
+            enabled = bool(enabled)
+
+        if not enabled:
+            return message_text
+        return f"<@{mention_user_id}> {message_text}"
+
     async def _run_process_watcher(self, watcher: dict) -> None:
         """
         Periodically check a background process and push updates to the user.
@@ -8059,6 +8095,13 @@ class GatewayRunner:
                     if adapter and chat_id:
                         try:
                             send_meta = {"thread_id": thread_id} if thread_id else None
+                            message_text = self._prefix_platform_notification_mention(
+                                adapter,
+                                platform_name,
+                                message_text,
+                                user_id=user_id,
+                                purpose="completion",
+                            )
                             await adapter.send(chat_id, message_text, metadata=send_meta)
                         except Exception as e:
                             logger.error("Watcher delivery error: %s", e)

@@ -153,7 +153,8 @@ class TestSlackApprovalAction:
     """Test the approval button click handler."""
 
     @pytest.mark.asyncio
-    async def test_resolves_approval(self):
+    async def test_resolves_approval(self, monkeypatch):
+        monkeypatch.delenv("SLACK_ALLOWED_USERS", raising=False)
         adapter = _make_adapter()
         adapter._approval_resolved["1234.5678"] = False
 
@@ -189,7 +190,8 @@ class TestSlackApprovalAction:
         assert "Approved once by norbert" in update_kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_prevents_double_click(self):
+    async def test_prevents_double_click(self, monkeypatch):
+        monkeypatch.delenv("SLACK_ALLOWED_USERS", raising=False)
         adapter = _make_adapter()
         adapter._approval_resolved["1234.5678"] = True  # Already resolved
 
@@ -212,7 +214,8 @@ class TestSlackApprovalAction:
         mock_resolve.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_deny_action(self):
+    async def test_deny_action(self, monkeypatch):
+        monkeypatch.delenv("SLACK_ALLOWED_USERS", raising=False)
         adapter = _make_adapter()
         adapter._approval_resolved["1.2"] = False
 

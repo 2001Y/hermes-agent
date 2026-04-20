@@ -1216,6 +1216,12 @@ class SlackAdapter(BasePlatformAdapter):
         try:
             cmd_preview = command[:2900] + "..." if len(command) > 2900 else command
             thread_ts = self._resolve_thread_ts(None, metadata)
+            mention_prefix = self._notification_mention_prefix(
+                (metadata or {}).get("user_id", ""),
+                extra_key="mention_on_approval_required",
+                env_var="SLACK_MENTION_ON_APPROVAL_REQUIRED",
+            )
+            block_mention_prefix = f"{mention_prefix.rstrip()}\n" if mention_prefix else ""
 
             blocks = [
                 {
@@ -1223,7 +1229,7 @@ class SlackAdapter(BasePlatformAdapter):
                     "text": {
                         "type": "mrkdwn",
                         "text": (
-                            f":warning: *Command Approval Required*\n"
+                            f"{block_mention_prefix}:warning: *Command Approval Required*\n"
                             f"```{cmd_preview}```\n"
                             f"Reason: {description}"
                         ),
@@ -1264,7 +1270,7 @@ class SlackAdapter(BasePlatformAdapter):
 
             kwargs: Dict[str, Any] = {
                 "channel": chat_id,
-                "text": f"⚠️ Command approval required: {cmd_preview[:100]}",
+                "text": f"{mention_prefix}⚠️ Command approval required: {cmd_preview[:100]}",
                 "blocks": blocks,
             }
             if thread_ts:
@@ -1674,3 +1680,21 @@ class SlackAdapter(BasePlatformAdapter):
         if isinstance(raw, str) and raw.strip():
             return {part.strip() for part in raw.split(",") if part.strip()}
         return set()
+
+    def _notification_mention_enabled(self, extra_key: str, env_var: str) -> bool:
+        """Return whether a Slack notification type should @mention the user."""
+        configured = self.config.extra.get(extra_key)
+        if configured is not None:
+            if isinstance(configured, str):
+                return configured.strip().lower() in ("true", "1", "yes", "on")
+            return bool(configured)
+        return os.getenv(env_var, "false").strip().lower() in ("true", "1", "yes", "on")
+
+    def _notification_mention_prefix(self, user_id: str, *, extra_key: str, env_var: str) -> str:
+        """Return a Slack user mention prefix for opted-in notifications."""
+        user_id = str(user_id or "").strip()
+        if not user_id:
+            return ""
+        if not self._notification_mention_enabled(extra_key, env_var):
+            return ""
+        return f"<@{user_id}> "
