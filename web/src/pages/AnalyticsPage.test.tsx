@@ -30,6 +30,7 @@ const baseResponse: AnalyticsResponse = {
       estimated_cost: 0.25,
       actual_cost: 0.1,
       sessions: 2,
+      api_calls: 3,
     },
   ],
   by_model: [
@@ -39,6 +40,7 @@ const baseResponse: AnalyticsResponse = {
       output_tokens: 800,
       estimated_cost: 0.25,
       sessions: 2,
+      api_calls: 3,
     },
   ],
   totals: {
@@ -49,6 +51,7 @@ const baseResponse: AnalyticsResponse = {
     total_estimated_cost: 0.25,
     total_actual_cost: 0.1,
     total_sessions: 2,
+    total_api_calls: 3,
   },
   provider_monthly_usage: {
     sources: [
@@ -95,6 +98,15 @@ const baseResponse: AnalyticsResponse = {
         reason: "no_documented_usage_api",
       },
     ],
+  },
+  skills: {
+    summary: {
+      total_skill_loads: 0,
+      total_skill_edits: 0,
+      total_skill_actions: 0,
+      distinct_skills_used: 0,
+    },
+    top_skills: [],
   },
 };
 
