@@ -129,20 +129,47 @@ class TestSlackExecApproval:
         assert result.success is False
 
     @pytest.mark.asyncio
-    async def test_truncates_long_command(self):
+    async def test_truncates_long_command_to_fit_slack_section_limit(self):
         adapter = _make_adapter()
         mock_client = adapter._team_clients["T1"]
         mock_client.chat_postMessage = AsyncMock(return_value={"ts": "1.2"})
 
         long_cmd = "x" * 5000
+        long_reason = "Security scan — [MEDIUM] Lookalike TLD detected: Domain uses '.dev' TLD which can be confused with file extensions"
         await adapter.send_exec_approval(
-            chat_id="C1", command=long_cmd, session_key="s"
+            chat_id="C1",
+            command=long_cmd,
+            session_key="s",
+            description=long_reason,
         )
 
         kwargs = mock_client.chat_postMessage.call_args[1]
         section_text = kwargs["blocks"][0]["text"]["text"]
         assert "..." in section_text
-        assert len(section_text) < 5000
+        assert len(section_text) <= 3000
+        assert long_reason in section_text
+
+    @pytest.mark.asyncio
+    async def test_truncates_combined_command_and_reason_to_fit_slack_section_limit(self):
+        adapter = _make_adapter()
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_postMessage = AsyncMock(return_value={"ts": "1.2"})
+
+        long_cmd = "x" * 5000
+        very_long_reason = "Security finding; " * 400
+        await adapter.send_exec_approval(
+            chat_id="C1",
+            command=long_cmd,
+            session_key="s",
+            description=very_long_reason,
+        )
+
+        kwargs = mock_client.chat_postMessage.call_args[1]
+        section_text = kwargs["blocks"][0]["text"]["text"]
+        assert len(section_text) <= 3000
+        assert "Reason:" in section_text
+        assert "```" in section_text
+        assert "..." in section_text
 
 
 # ===========================================================================

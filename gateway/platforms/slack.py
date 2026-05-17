@@ -53,6 +53,19 @@ from gateway.platforms.base import (
 
 logger = logging.getLogger(__name__)
 
+_SLACK_BLOCK_TEXT_LIMIT = 3000
+_SLACK_APPROVAL_REASON_TARGET = 160
+
+
+def _truncate_for_slack_text_limit(text: str, limit: int = _SLACK_BLOCK_TEXT_LIMIT) -> str:
+    """Trim text to Slack's per-block text limit, preserving an ellipsis when possible."""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return text[: limit - 3] + "..."
+
+
 # ContextVar carrying the user_id of the slash-command invoker.
 # Set in _handle_slash_command, read in send() to match the correct
 # stashed response_url when multiple users issue commands on the same
@@ -2152,7 +2165,6 @@ class SlackAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
-            cmd_preview = command[:2900] + "..." if len(command) > 2900 else command
             thread_ts = self._resolve_thread_ts(None, metadata)
             mention_prefix = self._notification_mention_prefix(
                 (metadata or {}).get("user_id", ""),
@@ -2161,16 +2173,26 @@ class SlackAdapter(BasePlatformAdapter):
             )
             block_mention_prefix = f"{mention_prefix.rstrip()}\n" if mention_prefix else ""
 
+            section_prefix = (
+                f"{block_mention_prefix}:warning: *Command Approval Required*\n```")
+            reason_prefix = "```\nReason: "
+            content_budget = max(
+                0,
+                _SLACK_BLOCK_TEXT_LIMIT - len(section_prefix) - len(reason_prefix),
+            )
+            reason_target = min(len(description), _SLACK_APPROVAL_REASON_TARGET)
+            command_target = max(0, content_budget - reason_target)
+            cmd_preview = _truncate_for_slack_text_limit(command, command_target)
+            reason_budget = max(0, content_budget - len(cmd_preview))
+            description_preview = _truncate_for_slack_text_limit(description, reason_budget)
+            section_text = f"{section_prefix}{cmd_preview}{reason_prefix}{description_preview}"
+
             blocks = [
                 {
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": (
-                            f"{block_mention_prefix}:warning: *Command Approval Required*\n"
-                            f"```{cmd_preview}```\n"
-                            f"Reason: {description}"
-                        ),
+                        "text": section_text,
                     },
                 },
                 {
