@@ -40,7 +40,7 @@ class ImmediateThread:
         self._target()
 
 
-def test_background_review_shuts_down_memory_provider_before_close(monkeypatch):
+def test_background_review_shuts_down_memory_provider_before_release(monkeypatch):
     events = []
 
     class FakeReviewAgent:
@@ -53,6 +53,9 @@ def test_background_review_shuts_down_memory_provider_before_close(monkeypatch):
 
         def shutdown_memory_provider(self):
             events.append(("shutdown_memory_provider", None))
+
+        def release_clients(self):
+            events.append(("release_clients", None))
 
         def close(self):
             events.append(("close", None))
@@ -72,8 +75,50 @@ def test_background_review_shuts_down_memory_provider_before_close(monkeypatch):
         "init",
         "run_conversation",
         "shutdown_memory_provider",
-        "close",
+        "release_clients",
     ]
+    assert ("close", None) not in events
+
+
+def test_background_review_exception_releases_clients_without_closing_session(monkeypatch):
+    """Failure cleanup must not kill process state owned by the parent session."""
+    events = []
+
+    class FakeReviewAgent:
+        def __init__(self, **kwargs):
+            events.append(("init", kwargs))
+            self._session_messages = []
+
+        def run_conversation(self, **kwargs):
+            events.append(("run_conversation", kwargs))
+            raise RuntimeError("review failed")
+
+        def shutdown_memory_provider(self):
+            events.append(("shutdown_memory_provider", None))
+
+        def release_clients(self):
+            events.append(("release_clients", None))
+
+        def close(self):
+            events.append(("close", None))
+
+    monkeypatch.setattr(run_agent_module, "AIAgent", FakeReviewAgent)
+    monkeypatch.setattr(run_agent_module.threading, "Thread", ImmediateThread)
+
+    agent = _bare_agent()
+    AIAgent._spawn_background_review(
+        agent,
+        messages_snapshot=[{"role": "user", "content": "hello"}],
+        review_memory=True,
+    )
+
+    assert [name for name, _payload in events] == [
+        "init",
+        "run_conversation",
+        "shutdown_memory_provider",
+        "release_clients",
+    ]
+    assert ("close", None) not in events
 
 
 def test_background_review_fork_opts_out_of_session_finalization(monkeypatch):
@@ -120,11 +165,11 @@ def test_background_review_fork_opts_out_of_session_finalization(monkeypatch):
     assert seen.get("at_run_time") is False
 
 
-def test_background_review_summarizer_receives_captured_messages_after_close(monkeypatch):
-    """The action summarizer must see review messages even after close cleanup.
+def test_background_review_summarizer_receives_captured_messages_after_release(monkeypatch):
+    """The action summarizer must see review messages after client release.
 
     Regression for the bug where ``review_messages`` was snapshot AFTER
-    ``review_agent.close()``. close() is allowed to clean per-session state
+    review-agent teardown. release_clients() is allowed to clean per-session state
     (including ``_session_messages``), so the summarizer would receive an
     empty list and the user-visible self-improvement summary would silently
     disappear. The fix snapshots ``_session_messages`` before teardown.
@@ -153,11 +198,14 @@ def test_background_review_summarizer_receives_captured_messages_after_close(mon
         def shutdown_memory_provider(self):
             events.append("shutdown_memory_provider")
 
-        def close(self):
-            events.append("close")
-            # close() is allowed to clean _session_messages — the fix
+        def release_clients(self):
+            events.append("release_clients")
+            # release_clients() is allowed to clean _session_messages — the fix
             # must have snapshot them before this runs.
             self._session_messages = []
+
+        def close(self):
+            events.append("close")
 
     def fake_summarize(review_messages, prior_snapshot, notification_mode="on"):
         events.append("summarize")
@@ -186,9 +234,10 @@ def test_background_review_summarizer_receives_captured_messages_after_close(mon
     assert events == [
         "run_conversation",
         "shutdown_memory_provider",
-        "close",
+        "release_clients",
         "summarize",
     ]
+    assert "close" not in events
     assert captured["review_messages"] == [review_tool_message]
     assert captured["prior_snapshot"] == messages_snapshot
     assert captured["notification_mode"] == "on"
