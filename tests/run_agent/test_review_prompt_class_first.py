@@ -179,6 +179,43 @@ def test_combined_review_prompt_preserves_opt_out_clause():
 
 
 # ---------------------------------------------------------------------------
+# Guard contract — #62397.  These are behavioral clauses, not a full prompt
+# snapshot.  Both prompt-selection routes must describe only the mutations the
+# current skill_manager guard actually enforces.
+# ---------------------------------------------------------------------------
+
+
+def _read_before_write_section(prompt: str) -> str:
+    marker = "Read-before-write"
+    assert marker in prompt, "must describe the skill_manage read-before-write guard"
+    tail = prompt.split(marker, 1)[1]
+    return tail.split("User-preference", 1)[0]
+
+
+def _assert_read_before_write_contract(prompt: str) -> None:
+    section = _read_before_write_section(prompt)
+    lower = section.lower()
+    assert "skill_view(name)" in section
+    assert "patch" in lower and "edit" in lower
+    assert "this review turn" in lower
+    assert "existing supporting" in lower
+    assert "skill_view(name, file_path=...)" in section
+    assert all(action in lower for action in ("overwrite", "patch", "remove"))
+    assert "new supporting file" in lower and "does not require" in lower
+    assert "_read_before_write_required" in section
+    assert "retry" in lower
+    assert "delete" not in lower, "current delete path has no read-before-write guard"
+
+
+def test_skill_review_prompt_explains_exact_guard_handshake():
+    _assert_read_before_write_contract(AIAgent._SKILL_REVIEW_PROMPT)
+
+
+def test_combined_review_prompt_explains_exact_guard_handshake():
+    _assert_read_before_write_contract(AIAgent._COMBINED_REVIEW_PROMPT)
+
+
+# ---------------------------------------------------------------------------
 # Anti-pattern guidance — see issue #6051. The reviewer was learning transient
 # environment failures (e.g. "browser tools do not work" from a fresh-install
 # Playwright miss) as durable skill rules, then citing them against itself for
