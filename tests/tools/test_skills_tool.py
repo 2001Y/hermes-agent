@@ -1403,6 +1403,33 @@ class TestSkillSearch:
         ]
         assert "FULL BODY SHOULD NOT LEAK" not in raw
 
+    def test_search_installed_skills_tokenizes_query_and_ranks_name_matches(
+        self, tmp_path
+    ):
+        for index in range(12):
+            _make_skill(
+                tmp_path,
+                f"noise-{index:02d}-token-compression",
+                category="analysis",
+            )
+        _make_skill(
+            tmp_path,
+            "token-compression-agent-tools",
+            category="software-development",
+        )
+        _make_skill(tmp_path, "compression-only", category="analysis")
+
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            raw = skill_search(
+                "token compression",
+                source="installed",
+                limit=1,
+            )
+
+        result = json.loads(raw)
+        assert result["count"] == 1
+        assert result["results"][0]["name"] == "token-compression-agent-tools"
+
     def test_search_validates_empty_query(self):
         result = json.loads(skill_search("   "))
 

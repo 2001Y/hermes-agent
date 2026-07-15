@@ -799,17 +799,57 @@ def _skill_identifier(skill: Dict[str, Any]) -> str:
     return f"{category}/{name}" if category else name
 
 
-def _installed_skill_matches(skill: Dict[str, Any], query: str) -> bool:
-    haystack = " ".join(
-        str(value or "")
-        for value in (
-            skill.get("name"),
-            skill.get("description"),
-            skill.get("category"),
-            " ".join(skill.get("tags") or []),
+def _skill_search_tokens(value: Any) -> Tuple[str, ...]:
+    """Normalize natural-language and separator-delimited search terms."""
+    return tuple(re.findall(r"[a-z0-9]+", str(value or "").lower()))
+
+
+def _installed_skill_score(skill: Dict[str, Any], query: str) -> Optional[int]:
+    """Return a deterministic relevance score, or ``None`` for no match.
+
+    Installed-skill search intentionally stays metadata-only. Query tokens may
+    match across name, description, category, and already-indexed tags, while
+    name matches outrank descriptive mentions so a small result limit does not
+    hide the skill the user named.
+    """
+    query_tokens = _skill_search_tokens(query)
+    if not query_tokens:
+        return None
+
+    name_tokens = _skill_search_tokens(skill.get("name"))
+    metadata_tokens = _skill_search_tokens(
+        " ".join(
+            str(value or "")
+            for value in (
+                skill.get("name"),
+                skill.get("description"),
+                skill.get("category"),
+                " ".join(skill.get("tags") or []),
+            )
         )
-    ).lower()
-    return query.lower() in haystack
+    )
+
+    def _all_query_tokens_match(tokens: Tuple[str, ...]) -> bool:
+        return all(any(part in token for token in tokens) for part in query_tokens)
+
+    if not _all_query_tokens_match(metadata_tokens):
+        return None
+
+    query_phrase = " ".join(query_tokens)
+    name_phrase = " ".join(name_tokens)
+    if name_phrase == query_phrase:
+        return 1000
+    if name_phrase.startswith(f"{query_phrase} "):
+        return 900
+    if query_phrase in name_phrase:
+        return 800
+    if _all_query_tokens_match(name_tokens):
+        return 700
+    return 400
+
+
+def _installed_skill_matches(skill: Dict[str, Any], query: str) -> bool:
+    return _installed_skill_score(skill, query) is not None
 
 
 def _compact_text(value: Any, limit: int) -> str:
@@ -905,7 +945,14 @@ def skill_search(
                 skill for skill in _find_all_skills()
                 if _installed_skill_matches(skill, normalized_query)
             ]
-            for skill in _sort_skills(installed):
+            installed.sort(
+                key=lambda skill: (
+                    -(_installed_skill_score(skill, normalized_query) or 0),
+                    skill.get("category") or "",
+                    skill["name"],
+                )
+            )
+            for skill in installed:
                 compact = _compact_installed_skill_result(skill)
                 identifier = str(compact.get("identifier") or compact.get("name") or "")
                 if identifier in seen:
