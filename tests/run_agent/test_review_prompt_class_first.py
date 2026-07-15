@@ -14,6 +14,8 @@ These tests assert behavioral *instructions* are present — they do NOT
 snapshot the full prompt text (change-detector).
 """
 
+import pytest
+
 from run_agent import AIAgent
 
 
@@ -194,17 +196,57 @@ def _read_before_write_section(prompt: str) -> str:
 
 def _assert_read_before_write_contract(prompt: str) -> None:
     section = _read_before_write_section(prompt)
-    lower = section.lower()
-    assert "skill_view(name)" in section
-    assert "patch" in lower and "edit" in lower
-    assert "this review turn" in lower
-    assert "existing supporting" in lower
-    assert "skill_view(name, file_path=...)" in section
-    assert all(action in lower for action in ("overwrite", "patch", "remove"))
-    assert "new supporting file" in lower and "does not require" in lower
-    assert "_read_before_write_required" in section
-    assert "retry" in lower
+    normalized = " ".join(section.split())
+    lower = normalized.lower()
+    assert (
+        "before patch/edit of an existing SKILL.md, load the exact target in "
+        "THIS review turn with skill_view(name)."
+    ) in normalized
+    assert (
+        "Before overwrite, patch, or remove of an existing supporting file, "
+        "call skill_view(name, file_path=...)."
+    ) in normalized
+    assert (
+        "A new skill or new supporting file does not require (and cannot have) "
+        "a pre-read."
+    ) in normalized
+    assert (
+        "If skill_manage returns _read_before_write_required, view that exact "
+        "target and retry once, basing the write on the content just returned."
+    ) in normalized
     assert "delete" not in lower, "current delete path has no read-before-write guard"
+
+
+@pytest.mark.parametrize(
+    "wrong_clause",
+    (
+        (
+            "A new skill requires a pre-read. A new supporting file does not "
+            "require (and cannot have) a pre-read."
+        ),
+        (
+            "A new skill does not require (and cannot have) a pre-read. A new "
+            "supporting file requires a pre-read."
+        ),
+        "",
+    ),
+)
+def test_read_before_write_contract_rejects_new_target_scope_mutations(wrong_clause):
+    prompt = AIAgent._SKILL_REVIEW_PROMPT.replace(
+        "A new skill or new supporting file does not require (and cannot have) a pre-read.",
+        wrong_clause,
+    )
+
+    with pytest.raises(AssertionError):
+        _assert_read_before_write_contract(prompt)
+
+
+@pytest.mark.parametrize("replacement", ("retry repeatedly", ""))
+def test_read_before_write_contract_rejects_retry_limit_mutations(replacement):
+    prompt = AIAgent._SKILL_REVIEW_PROMPT.replace("retry once", replacement)
+
+    with pytest.raises(AssertionError):
+        _assert_read_before_write_contract(prompt)
 
 
 def test_skill_review_prompt_explains_exact_guard_handshake():
