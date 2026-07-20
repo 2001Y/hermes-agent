@@ -81,6 +81,7 @@ def _build_full_manifest(
         "channels:history",
         "channels:read",
         "chat:write",
+        "chat:write.customize",
         "commands",
         "files:read",
         "files:write",
