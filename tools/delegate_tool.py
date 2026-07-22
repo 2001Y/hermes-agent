@@ -2427,6 +2427,7 @@ def delegate_task(
     goal: Optional[str] = None,
     context: Optional[str] = None,
     tasks: Optional[List[Dict[str, Any]]] = None,
+    model: Optional[str] = None,
     max_iterations: Optional[int] = None,
     role: Optional[str] = None,
     background: Optional[bool] = None,
@@ -2436,8 +2437,8 @@ def delegate_task(
     Spawn one or more child agents to handle delegated tasks.
 
     Supports two modes:
-      - Single: provide goal (+ optional context and role)
-      - Batch:  provide tasks array [{goal, context, role}, ...]
+      - Single: provide goal (+ optional context, model, and role)
+      - Batch:  provide tasks array [{goal, context, model, role}, ...]
 
     The 'role' parameter controls whether a child can further delegate:
     'leaf' (default) cannot; 'orchestrator' retains the delegation
@@ -2489,6 +2490,10 @@ def delegate_task(
 
     # Load config
     cfg = _load_config()
+    try:
+        requested_model = _resolve_requested_delegation_model(model, cfg)
+    except ValueError as exc:
+        return tool_error(str(exc))
     default_max_iter = cfg.get("max_iterations", DEFAULT_MAX_ITERATIONS)
     # Model-supplied max_iterations is ignored — the config value is authoritative
     # so users get predictable budgets. The kwarg is retained for internal callers
@@ -2540,6 +2545,7 @@ def delegate_task(
         return tool_error("No tasks provided.")
 
     # Validate each task has a goal
+    task_models: List[Optional[str]] = []
     for i, task in enumerate(task_list):
         if not isinstance(task, dict):
             return tool_error(
@@ -2547,6 +2553,12 @@ def delegate_task(
             )
         if not task.get("goal", "").strip():
             return tool_error(f"Task {i} is missing a 'goal'.")
+        try:
+            task_models.append(
+                _resolve_requested_delegation_model(task.get("model"), cfg)
+            )
+        except ValueError as exc:
+            return tool_error(f"Task {i}: {exc}")
 
     overall_start = time.monotonic()
     results = []
@@ -2593,7 +2605,14 @@ def delegate_task(
                 # Subagents always inherit the parent's toolsets; the model
                 # cannot choose or narrow them (no model-facing toolsets arg).
                 toolsets=None,
-                model=creds["model"],
+                # A per-task model beats the top-level model, which beats the
+                # operator-configured delegation.model.  When all are absent,
+                # _build_child_agent inherits the parent's model unchanged.
+                model=(
+                    task_models[i]
+                    or requested_model
+                    or creds["model"]
+                ),
                 max_iterations=effective_max_iter,
                 task_count=n_tasks,
                 parent_agent=parent_agent,
@@ -3325,6 +3344,60 @@ def _load_config() -> dict:
         return {}
 
 
+def _get_allowed_delegation_models(cfg: Optional[dict] = None) -> List[str]:
+    """Return operator-allowlisted per-call child model IDs.
+
+    An omitted/empty allowlist intentionally means that model-facing per-call
+    selection is disabled.  The existing configuration-wide
+    ``delegation.model`` behavior remains available independently.
+    """
+    config = cfg if isinstance(cfg, dict) else _load_config()
+    raw = config.get("allowed_models")
+    if not isinstance(raw, list):
+        return []
+    result: List[str] = []
+    for value in raw:
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def _resolve_requested_delegation_model(
+    requested: Any,
+    cfg: dict,
+) -> Optional[str]:
+    """Validate one model-facing per-call model selection.
+
+    Provider, endpoint, and credentials remain operator-controlled.  The model
+    may select only an exact ID from ``delegation.allowed_models``; an explicit
+    selection without an allowlist fails closed rather than silently routing to
+    an arbitrary endpoint.
+    """
+    if requested is None or requested == "":
+        return None
+    if not isinstance(requested, str):
+        raise ValueError("model must be a string")
+    requested = requested.strip()
+    if not requested:
+        return None
+    allowed = _get_allowed_delegation_models(cfg)
+    if requested not in allowed:
+        if allowed:
+            allowed_text = ", ".join(allowed)
+            raise ValueError(
+                f"model {requested!r} is not allowlisted for per-call delegation "
+                f"(allowed: {allowed_text})"
+            )
+        raise ValueError(
+            "per-call model selection is disabled; configure "
+            "delegation.allowed_models first"
+        )
+    return requested
+
+
 # ---------------------------------------------------------------------------
 # OpenAI Function-Calling Schema
 # ---------------------------------------------------------------------------
@@ -3380,7 +3453,7 @@ def _build_top_level_description() -> str:
         "Only the final summary is returned -- intermediate tool results "
         "never enter your context window.\n\n"
         "TWO MODES (one of 'goal' or 'tasks' is required):\n"
-        "1. Single task: provide 'goal' (+ optional context and role).\n"
+        "1. Single task: provide 'goal' (+ optional context, model, and role).\n"
         f"2. Batch (parallel): provide 'tasks' array with up to {max_children} "
         f"items concurrently for this user (configured via "
         f"delegation.max_concurrent_children in config.yaml). {nesting_clause}\n\n"
@@ -3434,7 +3507,7 @@ def _build_top_level_description() -> str:
         f"Orchestrators are bounded by max_spawn_depth={max_depth} for this "
         f"user and can be disabled globally via "
         "delegation.orchestrator_enabled=false.\n"
-        "- Subagent model is NOT selectable per call: children inherit the parent model (plus its fallback chain) unless you pin all subagents to a model via delegation.provider / delegation.model in config.yaml.\n"
+        "- Optional per-call model selection is available only for exact IDs in delegation.allowed_models; omit model to inherit the parent model. Provider, endpoint, credentials, tools, and limits remain operator-controlled.\n"
         "- Each subagent gets its own terminal session (separate working directory and state).\n"
         "- Results are always returned as an array, one entry per task."
     )
@@ -3449,8 +3522,22 @@ def _build_tasks_param_description() -> str:
     return (
         f"Batch mode: tasks to run in parallel (up to {max_children} for this "
         f"user, set via delegation.max_concurrent_children). Each gets "
-        "its own subagent with isolated context and terminal session. "
+        "its own subagent with isolated context and terminal session; each task "
+        "may optionally specify an allowlisted model. "
         "When provided, top-level goal/context/role are ignored."
+    )
+
+
+def _build_model_param_description() -> str:
+    allowed = _get_allowed_delegation_models()
+    if allowed:
+        return (
+            "Optional exact model ID for this child. Omit to inherit the parent "
+            f"model. Operator allowlist: {', '.join(allowed)}."
+        )
+    return (
+        "Optional model ID is disabled until the operator configures "
+        "delegation.allowed_models. Omit this field to inherit the parent model."
     )
 
 
@@ -3505,8 +3592,26 @@ def _build_dynamic_schema_overrides() -> dict:
     overrides_params["properties"] = {
         k: dict(v) for k, v in DELEGATE_TASK_SCHEMA["parameters"]["properties"].items()
     }
+    # The task item schema is nested; copy its child maps too so a dynamic
+    # allowlist/description update never mutates DELEGATE_TASK_SCHEMA itself.
+    tasks_property = dict(overrides_params["properties"]["tasks"])
+    tasks_items = dict(tasks_property["items"])
+    tasks_items["properties"] = {
+        k: dict(v) for k, v in tasks_items["properties"].items()
+    }
+    tasks_property["items"] = tasks_items
+    overrides_params["properties"]["tasks"] = tasks_property
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
     overrides_params["properties"]["role"]["description"] = _build_role_param_description()
+    model_description = _build_model_param_description()
+    overrides_params["properties"]["model"]["description"] = model_description
+    task_model = dict(overrides_params["properties"]["tasks"]["items"]["properties"]["model"])
+    task_model["description"] = model_description
+    overrides_params["properties"]["tasks"]["items"]["properties"]["model"] = task_model
+    allowed_models = _get_allowed_delegation_models()
+    if allowed_models:
+        overrides_params["properties"]["model"]["enum"] = allowed_models
+        overrides_params["properties"]["tasks"]["items"]["properties"]["model"]["enum"] = allowed_models
 
     return {
         "description": _build_top_level_description(),
@@ -3548,6 +3653,10 @@ DELEGATE_TASK_SCHEMA = {
                     "specific you are, the better the subagent performs."
                 ),
             },
+            "model": {
+                "type": "string",
+                "description": "(rebuilt at get_definitions() time)",
+            },
             "tasks": {
                 "type": "array",
                 "items": {
@@ -3557,6 +3666,10 @@ DELEGATE_TASK_SCHEMA = {
                         "context": {
                             "type": "string",
                             "description": "Task-specific context",
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "Allowlisted model override for this task.",
                         },
                         "role": {
                             "type": "string",
@@ -3645,6 +3758,7 @@ registry.register(
         goal=args.get("goal"),
         context=args.get("context"),
         tasks=_strip_model_hidden_task_fields(args.get("tasks")),
+        model=args.get("model"),
         max_iterations=args.get("max_iterations"),
         role=args.get("role"),
         background=_model_background_value(args, kw.get("parent_agent")),

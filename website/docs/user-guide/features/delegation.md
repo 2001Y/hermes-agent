@@ -15,7 +15,8 @@ Top-level model calls run in the background automatically. Hermes returns a hand
 ```python
 delegate_task(
     goal="Debug why tests fail",
-    context="Error: assertion in test_foo.py line 42"
+    context="Error: assertion in test_foo.py line 42",
+    model="gpt-5.6-sol"  # Optional allowlisted child model
 )
 ```
 
@@ -152,6 +153,45 @@ delegation:
 ```
 
 If omitted, subagents use the same model as the parent.
+
+### Per-call model selection
+
+For installations that explicitly configure `delegation.allowed_models`, the
+parent agent may select an allowlisted model for one normal child invocation.
+This is still a full Hermes `AIAgent` child: it has the inherited tool surface,
+its own isolated context and terminal session, the normal progress/cancellation
+path, and the normal summary/cost reporting. It is not a model-only completion
+or a separate `curl`/Hermes conversation.
+
+```yaml
+delegation:
+  # Omitted `model` still inherits the parent (Luna in this setup).
+  allowed_models:
+    - "gpt-5.6-luna"
+    - "gpt-5.6-sol"
+```
+
+The model can then choose the route only by exact ID:
+
+```python
+# One Sol child when independent review or a different reasoning profile helps.
+delegate_task(
+    goal="Review the proposed architecture for counterexamples",
+    context="Return risks and reversal conditions; do not modify files.",
+    model="gpt-5.6-sol",
+)
+
+# Mixed batch: per-task model beats the top-level model.
+delegate_task(tasks=[
+    {"goal": "Implement the fix", "model": "gpt-5.6-luna"},
+    {"goal": "Independently challenge the fix", "model": "gpt-5.6-sol"},
+])
+```
+
+Provider, endpoint, credentials, tools, recursion, and iteration limits remain
+operator-controlled. An explicit model not present in `allowed_models` fails
+closed. The parent remains responsible for verifying child claims and deciding
+whether a child is needed; Hermes does not force MoA on every turn.
 
 ## Inherited Tool Access
 
@@ -292,6 +332,7 @@ delegation:
   # max_concurrent_children: 3              # Parallel children per batch (default: 3)
   # max_spawn_depth: 1                      # Tree depth (floor 1, no ceiling, default 1 = flat). Raise to 2 to allow orchestrator children to spawn leaves; 3+ for deeper trees.
   # orchestrator_enabled: true              # Disable to force all children to leaf role.
+  # allowed_models: ["gpt-5.6-luna", "gpt-5.6-sol"]  # Optional exact per-call model allowlist
   model: "google/gemini-3-flash-preview"             # Optional provider/model override
   provider: "openrouter"                             # Optional built-in provider
   api_mode: anthropic_messages                       # optional; auto-detected from base_url for anthropic_messages endpoints

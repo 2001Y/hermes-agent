@@ -71,6 +71,8 @@ class TestDelegateRequirements(unittest.TestCase):
         self.assertIn("goal", props)
         self.assertIn("tasks", props)
         self.assertIn("context", props)
+        self.assertIn("model", props)
+        self.assertIn("model", props["tasks"]["items"]["properties"])
         # toolsets is intentionally NOT exposed to the model — subagents always
         # inherit the parent's toolsets. Letting the model name toolsets was a
         # capability-selection surface the model should not control.
@@ -87,6 +89,37 @@ class TestDelegateRequirements(unittest.TestCase):
         self.assertNotIn("acp_command", props["tasks"]["items"]["properties"])
         self.assertNotIn("acp_args", props["tasks"]["items"]["properties"])
         self.assertNotIn("maxItems", props["tasks"])  # removed — limit is now runtime-configurable
+
+    def test_schema_model_enum_comes_from_operator_allowlist(self):
+        from tools.delegate_tool import _build_dynamic_schema_overrides
+
+        with patch(
+            "tools.delegate_tool._load_config",
+            return_value={"allowed_models": ["gpt-5.6-luna", "gpt-5.6-sol"]},
+        ):
+            overrides = _build_dynamic_schema_overrides()
+
+        props = overrides["parameters"]["properties"]
+        self.assertEqual(props["model"]["enum"], ["gpt-5.6-luna", "gpt-5.6-sol"])
+        self.assertEqual(
+            props["tasks"]["items"]["properties"]["model"]["enum"],
+            ["gpt-5.6-luna", "gpt-5.6-sol"],
+        )
+
+    def test_dynamic_model_schema_does_not_mutate_static_schema(self):
+        from tools.delegate_tool import DELEGATE_TASK_SCHEMA, _build_dynamic_schema_overrides
+
+        with patch(
+            "tools.delegate_tool._load_config",
+            return_value={"allowed_models": ["gpt-5.6-sol"]},
+        ):
+            _build_dynamic_schema_overrides()
+
+        self.assertNotIn("enum", DELEGATE_TASK_SCHEMA["parameters"]["properties"]["model"])
+        self.assertNotIn(
+            "enum",
+            DELEGATE_TASK_SCHEMA["parameters"]["properties"]["tasks"]["items"]["properties"]["model"],
+        )
 
     def test_schema_description_advertises_runtime_limits(self):
         """The model must see the user's actual concurrency / spawn-depth caps,
@@ -312,6 +345,81 @@ class TestDelegateTask(unittest.TestCase):
         parent = _make_mock_parent()
         result = json.loads(delegate_task(goal="  ", parent_agent=parent))
         self.assertIn("error", result)
+
+    def test_model_selection_fails_closed_without_allowlist(self):
+        parent = _make_mock_parent()
+        with patch("tools.delegate_tool._load_config", return_value={}):
+            result = json.loads(
+                delegate_task(
+                    goal="Use a selected model",
+                    model="gpt-5.6-sol",
+                    parent_agent=parent,
+                )
+            )
+        self.assertIn("error", result)
+        self.assertIn("allowed_models", result["error"])
+
+    def test_model_selection_is_forwarded_to_normal_child(self):
+        parent = _make_mock_parent()
+        with (
+            patch(
+                "tools.delegate_tool._load_config",
+                return_value={"allowed_models": ["gpt-5.6-luna", "gpt-5.6-sol"]},
+            ),
+            patch("run_agent.AIAgent") as MockAgent,
+        ):
+            child = MagicMock()
+            child.run_conversation.return_value = {
+                "final_response": "done",
+                "completed": True,
+                "api_calls": 1,
+            }
+            MockAgent.return_value = child
+            result = json.loads(
+                delegate_task(
+                    goal="Use Sol as a normal worker",
+                    model="gpt-5.6-sol",
+                    parent_agent=parent,
+                )
+            )
+
+        self.assertIn("results", result)
+        self.assertEqual(MockAgent.call_args.kwargs["model"], "gpt-5.6-sol")
+
+    def test_task_model_beats_top_level_model(self):
+        parent = _make_mock_parent()
+        children = [MagicMock(), MagicMock()]
+        with (
+            patch(
+                "tools.delegate_tool._load_config",
+                return_value={"allowed_models": ["gpt-5.6-luna", "gpt-5.6-sol"]},
+            ),
+            patch("tools.delegate_tool._build_child_agent", side_effect=children) as build,
+            patch(
+                "tools.delegate_tool._run_single_child",
+                return_value={
+                    "task_index": 0,
+                    "status": "completed",
+                    "summary": "done",
+                    "api_calls": 1,
+                    "duration_seconds": 0.1,
+                },
+            ),
+        ):
+            result = json.loads(
+                delegate_task(
+                    tasks=[
+                        {"goal": "Luna worker"},
+                        {"goal": "Sol worker", "model": "gpt-5.6-sol"},
+                    ],
+                    model="gpt-5.6-luna",
+                    parent_agent=parent,
+                )
+            )
+
+        self.assertIn("results", result)
+        self.assertEqual(build.call_args_list[0].kwargs["model"], "gpt-5.6-luna")
+        self.assertEqual(build.call_args_list[1].kwargs["model"], "gpt-5.6-sol")
 
     def test_task_missing_goal(self):
         parent = _make_mock_parent()
