@@ -28,10 +28,57 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
+
+
+def _configured_value(
+    settings: Optional[Mapping[str, Any]],
+    key: str,
+    env_name: str,
+    default: Any = None,
+) -> Any:
+    """Read non-secret Live settings from platform config before environment."""
+    if isinstance(settings, Mapping) and key in settings and settings[key] is not None:
+        return settings[key]
+    return os.getenv(env_name, default)
+
+
+def _resolve_openai_realtime_credential() -> tuple[Optional[str], str]:
+    """Resolve the active Hermes Codex OAuth token or a direct API key.
+
+    Realtime accepts the same OAuth bearer used by Hermes's ``openai-codex``
+    provider.  The token is kept server-side and is exchanged for a short-lived
+    browser credential by ``/realtime/client_secrets``; it is never rendered in
+    the join page.  OAuth is preferred so a configured API key is not silently
+    used for a ChatGPT-subscription-backed Hermes session.
+    """
+    oauth_token = ""
+    try:
+        from hermes_cli.auth import resolve_codex_runtime_credentials
+
+        credentials = resolve_codex_runtime_credentials(refresh_if_expiring=True)
+        oauth_token = str(credentials.get("api_key") or "").strip()
+    except Exception as exc:  # pragma: no cover - auth-store failure path
+        logger.info(
+            "Hermes Live could not resolve openai-codex OAuth credentials: %s",
+            type(exc).__name__,
+        )
+    if oauth_token:
+        return oauth_token, "openai-codex-oauth"
+
+    try:
+        from agent.secret_scope import get_secret
+
+        direct_key = str(get_secret("OPENAI_API_KEY") or "").strip()
+    except Exception as exc:  # pragma: no cover - profile scope failure path
+        logger.info("Hermes Live could not resolve direct Realtime credentials: %s", type(exc).__name__)
+        direct_key = ""
+    if direct_key:
+        return direct_key, "api-key"
+    return None, "unconfigured"
 
 
 class SlackLiveError(RuntimeError):
@@ -373,12 +420,14 @@ class SlackLiveBridge:
             Callable[[LiveCallSession, str], Awaitable[Optional[str]]]
         ] = None,
         openai_api_key: Optional[str] = None,
+        openai_auth_mode: str = "unconfigured",
         realtime_model: str = "gpt-realtime-2.1",
         openai_safety_identifier: Optional[str] = None,
         session_ttl_seconds: float = 3600.0,
     ) -> None:
         self.join_url_base = (join_url_base or "").strip() or None
         self.openai_api_key = openai_api_key
+        self.openai_auth_mode = openai_auth_mode
         self.realtime_model = realtime_model
         self.openai_safety_identifier = openai_safety_identifier
         self.sessions = LiveCallRegistry(default_ttl_seconds=session_ttl_seconds)
@@ -392,20 +441,47 @@ class SlackLiveBridge:
         core_handler: Optional[
             Callable[[LiveCallSession, str], Awaitable[Optional[str]]]
         ] = None,
+        settings: Optional[Mapping[str, Any]] = None,
     ) -> "SlackLiveBridge":
-        ttl_raw = os.getenv("SLACK_LIVE_SESSION_TTL", "3600")
+        ttl_raw = _configured_value(settings, "live_session_ttl", "SLACK_LIVE_SESSION_TTL", "3600")
         try:
             ttl = float(ttl_raw)
-        except ValueError:
+        except (TypeError, ValueError):
             ttl = 3600.0
-        from agent.secret_scope import get_secret
+        if ttl <= 0:
+            ttl = 3600.0
+        openai_api_key, openai_auth_mode = _resolve_openai_realtime_credential()
 
         return cls(
-            join_url_base=os.getenv("SLACK_LIVE_JOIN_URL_BASE"),
+            join_url_base=_configured_value(
+                settings,
+                "live_join_url_base",
+                "SLACK_LIVE_JOIN_URL_BASE",
+            ),
             core_handler=core_handler,
-            openai_api_key=get_secret("OPENAI_API_KEY"),
-            realtime_model=os.getenv("SLACK_LIVE_REALTIME_MODEL", "gpt-realtime-2.1"),
-            openai_safety_identifier=os.getenv("SLACK_LIVE_SAFETY_IDENTIFIER"),
+            openai_api_key=openai_api_key,
+            openai_auth_mode=openai_auth_mode,
+            realtime_model=str(
+                _configured_value(
+                    settings,
+                    "live_realtime_model",
+                    "SLACK_LIVE_REALTIME_MODEL",
+                    "gpt-realtime-2.1",
+                )
+                or "gpt-realtime-2.1"
+            ).strip(),
+            openai_safety_identifier=(
+                str(
+                    _configured_value(
+                        settings,
+                        "live_safety_identifier",
+                        "SLACK_LIVE_SAFETY_IDENTIFIER",
+                        "",
+                    )
+                    or ""
+                ).strip()
+                or None
+            ),
             session_ttl_seconds=ttl,
         )
 
@@ -498,17 +574,25 @@ class LiveServer:
         self._task: Optional[asyncio.Task] = None
 
     @classmethod
-    def from_env(cls, bridge: SlackLiveBridge) -> "LiveServer":
-        raw_port = os.getenv("SLACK_LIVE_PORT", "8787")
+    def from_env(
+        cls,
+        bridge: SlackLiveBridge,
+        settings: Optional[Mapping[str, Any]] = None,
+    ) -> "LiveServer":
+        raw_port = _configured_value(settings, "live_port", "SLACK_LIVE_PORT", "8787")
         try:
             port = int(raw_port)
-        except ValueError:
+        except (TypeError, ValueError):
             port = 8787
         if not 1 <= port <= 65535:
             port = 8787
+        host = str(
+            _configured_value(settings, "live_host", "SLACK_LIVE_HOST", "127.0.0.1")
+            or "127.0.0.1"
+        ).strip()
         return cls(
             bridge,
-            host=os.getenv("SLACK_LIVE_HOST", "127.0.0.1"),
+            host=host,
             port=port,
         )
 

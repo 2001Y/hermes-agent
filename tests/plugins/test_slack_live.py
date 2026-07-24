@@ -236,6 +236,96 @@ async def test_realtime_token_endpoint_does_not_fallback_to_browser_api_key():
     assert "server" in response.json()["detail"].lower()
 
 
+def test_live_bridge_from_env_uses_codex_oauth_and_platform_settings(monkeypatch):
+    import hermes_cli.auth as hermes_auth
+
+    monkeypatch.setattr("agent.secret_scope.get_secret", lambda _name: "api-key-fallback")
+    monkeypatch.setattr(
+        hermes_auth,
+        "resolve_codex_runtime_credentials",
+        lambda **_kwargs: {"api_key": "oauth-test-token"},
+    )
+    monkeypatch.setenv("SLACK_LIVE_JOIN_URL_BASE", "https://env.example.test")
+    monkeypatch.setenv("SLACK_LIVE_PORT", "8799")
+
+    bridge = SlackLiveBridge.from_env(
+        settings={
+            "live_join_url_base": "https://configured.example.test",
+            "live_session_ttl": 120,
+            "live_realtime_model": "gpt-realtime-2",
+        }
+    )
+    server = LiveServer.from_env(
+        bridge,
+        settings={"live_host": "127.0.0.1", "live_port": 8798},
+    )
+
+    assert bridge.openai_api_key == "oauth-test-token"
+    assert bridge.openai_auth_mode == "openai-codex-oauth"
+    assert bridge.join_url_base == "https://configured.example.test"
+    assert bridge.realtime_model == "gpt-realtime-2"
+    assert bridge.sessions._default_ttl_seconds == 120
+    assert server.host == "127.0.0.1"
+    assert server.port == 8798
+
+
+@pytest.mark.asyncio
+async def test_realtime_token_endpoint_uses_server_side_oauth_credential(monkeypatch):
+    requests: list[dict] = []
+
+    class _Response:
+        status_code = 200
+        is_error = False
+
+        @staticmethod
+        def json():
+            return {
+                "value": "ephemeral-test-secret",
+                "expires_at": 2_000_000_000,
+                "session": {"id": "sess-test"},
+            }
+
+    class _Client:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, url, *, headers, json):
+            requests.append({"url": url, "headers": headers, "json": json})
+            return _Response()
+
+    real_async_client = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    bridge = SlackLiveBridge(
+        join_url_base="https://voice.example.test",
+        openai_api_key="oauth-test-token",
+        openai_auth_mode="openai-codex-oauth",
+    )
+    session = bridge.sessions.create(
+        team_id="T1",
+        channel_id="C1",
+        user_id="U1",
+        join_url_base="https://voice.example.test",
+    )
+    app = create_live_app(bridge)
+
+    async with real_async_client(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as http:
+        response = await http.post(f"/live/{session.token}/realtime-token")
+
+    assert response.status_code == 200
+    assert response.json()["value"] == "ephemeral-test-secret"
+    assert requests[0]["url"] == "https://api.openai.com/v1/realtime/client_secrets"
+    assert requests[0]["headers"]["Authorization"] == "Bearer oauth-test-token"
+
+
 @pytest.mark.asyncio
 async def test_live_server_real_http_smoke_serves_join_page():
     with socket.socket() as sock:

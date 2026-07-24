@@ -6,20 +6,42 @@ native Huddle audio to a bot.
 
 ## Local opt-in configuration
 
-Set these values in the Hermes runtime environment (do not put API keys in the
-browser or in a Slack message):
+The non-secret Live settings belong under the Slack platform's `extra` block:
+
+```yaml
+platforms:
+  slack:
+    extra:
+      live_enabled: true
+      live_join_url_base: http://127.0.0.1:8787
+      live_host: 127.0.0.1
+      live_port: 8787
+      live_realtime_model: gpt-realtime-2.1
+      live_session_ttl: 3600
+```
+
+The existing environment variables remain supported as a fallback for these
+non-secret values:
 
 ```text
 SLACK_LIVE_ENABLED=true
 SLACK_LIVE_JOIN_URL_BASE=http://127.0.0.1:8787
 SLACK_LIVE_HOST=127.0.0.1
 SLACK_LIVE_PORT=8787
-OPENAI_API_KEY=<server-side OpenAI API key>
 ```
 
-`SLACK_LIVE_JOIN_URL_BASE` must point at the Hermes Live server. For a remote
-Slack client, use an HTTPS URL that is reachable by that client. Browser
-microphone access requires a secure context, except for localhost.
+For Realtime authentication, Hermes first uses the existing `openai-codex`
+Hermes OAuth credential and exchanges it for a short-lived Realtime client
+secret. If that OAuth credential is unavailable, the server-side
+`OPENAI_API_KEY` is used as a fallback. The OAuth token and API key never enter
+the browser page or a Slack message. The OAuth-to-Realtime path was verified
+with `gpt-realtime-2.1` using a session handshake, session update, text response,
+and client-secret issuance; it is still an API behavior rather than a public
+ChatGPT UI guarantee.
+
+For a remote Slack client, `live_join_url_base` must be an HTTPS URL reachable
+by that client. Browser microphone access requires a secure context, except for
+localhost.
 
 Generate the Slack manifest again and reinstall the Slack app after adding the
 Calls scope:

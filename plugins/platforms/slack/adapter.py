@@ -1432,7 +1432,10 @@ class SlackAdapter(BasePlatformAdapter):
     def _get_live_bridge(self) -> SlackLiveBridge:
         bridge = getattr(self, "_live_bridge", None)
         if bridge is None:
-            bridge = SlackLiveBridge.from_env(core_handler=self._handle_live_core)
+            bridge = SlackLiveBridge.from_env(
+                core_handler=self._handle_live_core,
+                settings=self.config.extra,
+            )
             self._live_bridge = bridge
         return bridge
 
@@ -1443,18 +1446,19 @@ class SlackAdapter(BasePlatformAdapter):
         bridge = self._get_live_bridge()
         if not bridge.configured:
             logger.error(
-                "[Slack] SLACK_LIVE_ENABLED is true but "
-                "SLACK_LIVE_JOIN_URL_BASE is not configured; Live is disabled"
+                "[Slack] Live is enabled but live_join_url_base "
+                "(or SLACK_LIVE_JOIN_URL_BASE) is not configured; Live is disabled"
             )
             return
         try:
-            server = LiveServer.from_env(bridge)
+            server = LiveServer.from_env(bridge, settings=self.config.extra)
             await server.start()
             self._live_server = server
             logger.info(
-                "[Slack] Hermes Live control plane listening on %s:%s",
+                "[Slack] Hermes Live control plane listening on %s:%s (Realtime auth=%s)",
                 server.host,
                 server.port,
+                bridge.openai_auth_mode,
             )
         except Exception:
             self._live_server = None
@@ -1563,7 +1567,7 @@ class SlackAdapter(BasePlatformAdapter):
         if not bridge.openai_api_key:
             return (
                 "Hermes Liveは未設定です。Call作成前にサーバー側の "
-                "`OPENAI_API_KEY` を設定してください。"
+                "`OPENAI_API_KEY` またはHermesの `openai-codex` OAuth認証を設定してください。"
             )
 
         title = args or "Hermes Live"
