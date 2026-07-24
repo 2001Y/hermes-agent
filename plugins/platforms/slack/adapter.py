@@ -1539,7 +1539,8 @@ class SlackAdapter(BasePlatformAdapter):
             try:
                 await bridge.end_call(self._get_client(channel_id, team_id), current.token)
             except SlackLiveError as exc:
-                return f"Hermes Liveの終了に失敗しました: {exc}"
+                logger.warning("[Slack] Hermes Live call end failed: %s", exc, exc_info=True)
+                return "Hermes Liveの終了に失敗しました。管理者ログを確認してください。"
             return "Hermes Liveの通話を終了しました。"
 
         # A join URL is a bearer capability. Native slash commands have a
@@ -1582,7 +1583,7 @@ class SlackAdapter(BasePlatformAdapter):
             # Slack SDK errors are intentionally rendered without tokens or
             # response bodies; the adapter log retains the traceback.
             logger.warning("[Slack] Hermes Live call creation failed: %s", exc, exc_info=True)
-            return f"Hermes Liveの起動に失敗しました: {exc}"
+            return "Hermes Liveの起動に失敗しました。管理者ログを確認してください。"
 
         return (
             ":telephone_receiver: *Hermes Liveを開始しました*\n"
