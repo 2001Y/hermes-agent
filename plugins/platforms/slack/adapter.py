@@ -60,6 +60,21 @@ try:  # sibling module; support both package and flat plugin-dir import
 except ImportError:  # pragma: no cover - plugin loaded outside package context
     from block_kit import render_blocks  # type: ignore
 
+try:  # keep the Slack adapter importable when the plugin is loaded flat
+    from .live import (
+        LiveCallSession,
+        LiveServer,
+        SlackLiveBridge,
+        SlackLiveError,
+    )
+except ImportError:  # pragma: no cover - plugin loaded outside package context
+    from live import (  # type: ignore
+        LiveCallSession,
+        LiveServer,
+        SlackLiveBridge,
+        SlackLiveError,
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -502,6 +517,11 @@ class SlackAdapter(BasePlatformAdapter):
         self._socket_watchdog_task: Optional[asyncio.Task] = None
         self._socket_reconnect_lock = asyncio.Lock()
         self._socket_watchdog_interval_s = 15.0
+        # Slack Calls-backed Hermes Live is opt-in.  The bridge is lazy so a
+        # normal Slack gateway never reads the Realtime/API configuration or
+        # opens a local HTTP listener.
+        self._live_bridge: Optional[SlackLiveBridge] = None
+        self._live_server: Optional[LiveServer] = None
 
     def _start_socket_mode_handler(self) -> None:
         """Start the Slack Socket Mode background task."""
@@ -1282,6 +1302,7 @@ class SlackAdapter(BasePlatformAdapter):
             try:
                 self._start_socket_mode_handler()
                 self._running = True
+                await self._start_live_server_if_enabled()
                 self._ensure_socket_watchdog()
             except Exception:
                 self._running = False
@@ -1370,6 +1391,7 @@ class SlackAdapter(BasePlatformAdapter):
                 )
 
         await self._stop_socket_mode_handler()
+        await self._stop_live_server()
         self._app = None
         self._app_token = None
         self._proxy_url = None
@@ -1398,6 +1420,175 @@ class SlackAdapter(BasePlatformAdapter):
         if team_id and team_id in self._team_clients:
             return self._team_clients[team_id]
         return self._app.client  # fallback to primary
+
+    def _live_server_enabled(self) -> bool:
+        configured = self.config.extra.get("live_enabled") if self.config.extra else None
+        if configured is None:
+            configured = os.getenv("SLACK_LIVE_ENABLED", "false")
+        if isinstance(configured, str):
+            return configured.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(configured)
+
+    def _get_live_bridge(self) -> SlackLiveBridge:
+        bridge = getattr(self, "_live_bridge", None)
+        if bridge is None:
+            bridge = SlackLiveBridge.from_env(core_handler=self._handle_live_core)
+            self._live_bridge = bridge
+        return bridge
+
+    async def _start_live_server_if_enabled(self) -> None:
+        """Start the local Live control plane only after explicit opt-in."""
+        if not self._live_server_enabled():
+            return
+        bridge = self._get_live_bridge()
+        if not bridge.configured:
+            logger.error(
+                "[Slack] SLACK_LIVE_ENABLED is true but "
+                "SLACK_LIVE_JOIN_URL_BASE is not configured; Live is disabled"
+            )
+            return
+        try:
+            server = LiveServer.from_env(bridge)
+            await server.start()
+            self._live_server = server
+            logger.info(
+                "[Slack] Hermes Live control plane listening on %s:%s",
+                server.host,
+                server.port,
+            )
+        except Exception:
+            self._live_server = None
+            logger.error("[Slack] Hermes Live control plane failed to start", exc_info=True)
+
+    async def _stop_live_server(self) -> None:
+        server = getattr(self, "_live_server", None)
+        self._live_server = None
+        if server is not None:
+            await server.stop()
+
+    async def _handle_live_core(
+        self,
+        session: LiveCallSession,
+        prompt: str,
+    ) -> Optional[str]:
+        """Route one Live request through the normal Hermes Core handler.
+
+        This intentionally calls the GatewayRunner handler directly instead of
+        the platform delivery wrapper: the browser owns the audio/text reply,
+        while the handler still owns auth, session context, tools, approvals,
+        and the normal agent execution path.
+        """
+        handler = getattr(self, "_message_handler", None)
+        if handler is None:
+            raise SlackLiveError("Hermes Gateway message handler is not attached")
+
+        live_thread_id = f"live:{session.session_id}"
+        source = self.build_source(
+            chat_id=session.channel_id,
+            chat_name=session.channel_id,
+            chat_type="dm" if str(session.channel_id).startswith("D") else "group",
+            user_id=session.user_id,
+            thread_id=live_thread_id,
+            scope_id=session.team_id or None,
+        )
+        event = MessageEvent(
+            text=prompt,
+            message_type=MessageType.TEXT,
+            source=source,
+            raw_message={
+                "type": "hermes_live",
+                "live_session_id": session.session_id,
+            },
+            message_id=f"{session.session_id}:{time.monotonic_ns()}",
+            metadata={
+                "slack_live": True,
+                "slack_team_id": session.team_id,
+                "slack_channel_id": session.channel_id,
+            },
+        )
+        return await handler(event)
+
+    async def handle_live_command(self, event: MessageEvent) -> str:
+        """Handle `/live [status|end|title]` from the Slack gateway."""
+        raw = event.raw_message if isinstance(event.raw_message, dict) else {}
+        team_id = str(getattr(event.source, "scope_id", None) or raw.get("team_id") or "")
+        channel_id = str(event.source.chat_id or raw.get("channel_id") or "")
+        user_id = str(event.source.user_id or raw.get("user_id") or "")
+        bridge = self._get_live_bridge()
+        args = event.get_command_args().strip()
+        lowered = args.lower()
+
+        current = bridge.sessions.find_active(
+            team_id=team_id,
+            channel_id=channel_id,
+            user_id=user_id,
+        )
+
+        if lowered == "status":
+            if current is None:
+                return "Hermes Liveのアクティブな通話はありません。"
+            return (
+                f"Hermes Live: `{current.status.value}`\n"
+                f"Call ID: `{current.call_id or 'pending'}`\n"
+                f"有効期限: 約{max(0, int(current.expires_at - time.monotonic()))}秒後"
+            )
+
+        if lowered in {"end", "stop", "leave"}:
+            if current is None:
+                return "Hermes Liveのアクティブな通話はありません。"
+            try:
+                await bridge.end_call(self._get_client(channel_id, team_id), current.token)
+            except SlackLiveError as exc:
+                return f"Hermes Liveの終了に失敗しました: {exc}"
+            return "Hermes Liveの通話を終了しました。"
+
+        # A join URL is a bearer capability. Native slash commands have a
+        # response_url and therefore can return it ephemerally. A `!live`
+        # message in a channel cannot safely receive the URL, so refuse rather
+        # than leaking it into a shared channel.
+        if not raw.get("response_url"):
+            return "共有チャンネルでは `!live` ではなくSlackのネイティブ `/live` を使ってください。Join URLを公開しないためです。"
+
+        if current is not None:
+            return (
+                "このユーザーのHermes Liveはすでに起動中です。\n"
+                f"Join URL: {current.join_url}"
+            )
+        if not bridge.configured:
+            return (
+                "Hermes Liveは未設定です。管理者が "
+                "`SLACK_LIVE_JOIN_URL_BASE` と `SLACK_LIVE_ENABLED` を設定してください。"
+            )
+        if not bridge.openai_api_key:
+            return (
+                "Hermes Liveは未設定です。Call作成前にサーバー側の "
+                "`OPENAI_API_KEY` を設定してください。"
+            )
+
+        title = args or "Hermes Live"
+        if title.lower() in {"start", "begin"}:
+            title = "Hermes Live"
+        title = title[:200]
+        try:
+            session = await bridge.open_call(
+                self._get_client(channel_id, team_id),
+                team_id=team_id,
+                channel_id=channel_id,
+                user_id=user_id,
+                title=title,
+                thread_ts=getattr(event.source, "thread_id", None),
+            )
+        except Exception as exc:
+            # Slack SDK errors are intentionally rendered without tokens or
+            # response bodies; the adapter log retains the traceback.
+            logger.warning("[Slack] Hermes Live call creation failed: %s", exc, exc_info=True)
+            return f"Hermes Liveの起動に失敗しました: {exc}"
+
+        return (
+            ":telephone_receiver: *Hermes Liveを開始しました*\n"
+            f"Join URL: {session.join_url}\n"
+            "このURLは本人用の一時URLです。SlackのCallカードから参加できます。"
+        )
 
     async def send(
         self,

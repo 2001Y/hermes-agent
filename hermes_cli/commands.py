@@ -168,6 +168,9 @@ COMMAND_REGISTRY: list[CommandDef] = [
                subcommands=("kaomoji", "emoji", "unicode", "ascii")),
     CommandDef("voice", "Toggle voice mode", "Configuration",
                args_hint="[on|off|tts|status]", subcommands=("on", "off", "tts", "status")),
+    CommandDef("live", "Start or inspect a Hermes Live voice call on Slack", "Configuration",
+               gateway_only=True, args_hint="[status|end|title]",
+               subcommands=("status", "end")),
     CommandDef("busy", "Control what Enter does while Hermes is working", "Configuration",
                cli_only=True, args_hint="[queue|steer|interrupt|status]",
                subcommands=("queue", "steer", "interrupt", "status")),
@@ -1166,8 +1169,11 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #     (the rehaul folded the old /credits + /billing surfaces into /topup.)
 #   - moa: high-cost slash mode, available through /hermes moa to avoid
 #     displacing existing native Slack slash commands at the 50-command cap.
-#   - debug: the log/report upload surface; reached via /hermes debug on Slack.
-_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug"})
+#   - debug: the log/report upload surface; reached via /hermes debug.
+#   - version: low-frequency build information; reached via /hermes version so
+#     the new /live command does not silently displace the more actionable
+#     native /update command.
+_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "version"})
 
 
 def _sanitize_slack_name(raw: str) -> str:

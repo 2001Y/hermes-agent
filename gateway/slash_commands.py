@@ -2713,6 +2713,15 @@ class GatewaySlashCommandsMixin:
             )
             return t("gateway.voice.help", toggle=toggle_line, channels=channels)
 
+    async def _handle_live_command(self, event: MessageEvent) -> str:
+        """Start/manage the Slack Calls-backed Hermes Live surface."""
+        if event.source.platform != Platform.SLACK:
+            return "Hermes Live is currently available through Slack Calls only."
+        adapter = self._adapter_for_source(event.source)
+        if adapter is None or not hasattr(adapter, "handle_live_command"):
+            return "Hermes Live is not available because the Slack adapter is not connected."
+        return await adapter.handle_live_command(event)
+
     async def _handle_rollback_command(self, event: MessageEvent) -> str:
         """Handle /rollback command — list or restore filesystem checkpoints."""
         from gateway.run import _checkpoint_agent_kwargs, _load_gateway_config
