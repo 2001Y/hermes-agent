@@ -32,7 +32,7 @@ from typing import Any
 
 _GLOBAL_DEFAULTS: dict[str, Any] = {
     "tool_progress": "all",
-    "tool_progress_grouping": "accumulate",  # "accumulate" = edit one bubble; "separate" = one msg per tool
+    "tool_progress_grouping": "accumulate",  # "accumulate" = history; "latest" = latest only; "separate" = one msg per tool
     "show_reasoning": False,
     # How a reasoning/thinking summary is rendered when show_reasoning is on.
     #   "code"      -> 💭 **Reasoning:** + fenced code block (legacy default)
@@ -287,7 +287,7 @@ def _normalise(setting: str, value: Any) -> Any:
         return val if val in {"full", "verb", "off"} else "full"
     if setting == "tool_progress_grouping":
         val = str(value).lower()
-        return val if val in ("accumulate", "separate") else "accumulate"
+        return val if val in ("accumulate", "latest", "separate") else "accumulate"
     if setting == "reasoning_style":
         val = str(value).lower()
         return val if val in ("code", "blockquote", "subtext") else "code"
@@ -297,3 +297,17 @@ def _normalise(setting: str, value: Any) -> Any:
         except (TypeError, ValueError):
             return 0
     return value
+
+
+def update_tool_progress_lines(
+    lines: list[Any], message: Any, grouping: str,
+) -> list[Any]:
+    """Add one tool-progress message according to its grouping mode.
+
+    ``latest`` intentionally keeps only the newest line while the gateway
+    edits the same progress bubble. The other modes retain append behavior;
+    ``separate`` is handled by the sender's transport gate.
+    """
+    if grouping == "latest":
+        return [message]
+    return [*lines, message]

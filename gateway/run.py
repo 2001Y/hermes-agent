@@ -19113,7 +19113,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Per-platform display settings — resolve via display_config module
         # which checks display.platforms.<platform>.<key> first, then
         # display.<key> global, then built-in platform defaults.
-        from gateway.display_config import resolve_display_setting
+        from gateway.display_config import (
+            resolve_display_setting,
+            update_tool_progress_lines,
+        )
 
         # Apply tool preview length config (0 = no limit)
         try:
@@ -19154,7 +19157,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _env_tp and not _tool_progress_configured
             else (_resolved_tp or _env_tp or "all")
         )
-        # Tool progress grouping: "accumulate" (edit one bubble) or "separate" (one msg per tool)
+        # Tool progress grouping: "accumulate" (edit one bubble with history),
+        # "latest" (edit one bubble with only the newest tool), or "separate"
+        # (one msg per tool).
         progress_grouping = resolve_display_setting(user_config, platform_key, "tool_progress_grouping") or "accumulate"
         from gateway.status_phrases import choose_status_phrase, resolve_status_phrase_catalog
         _generic_status_recent: List[str] = []
@@ -19829,7 +19834,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         continue
                     else:
                         msg = raw
-                        progress_lines.append(msg)
+                        progress_lines = update_tool_progress_lines(
+                            progress_lines, msg, progress_grouping,
+                        )
 
                     if await _roll_progress_overflow_if_needed():
                         _last_edit_ts = time.monotonic()
@@ -19951,7 +19958,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 last_progress_msg[0] = None
                                 repeat_count[0] = 0
                             else:
-                                progress_lines.append(raw)
+                                progress_lines = update_tool_progress_lines(
+                                    progress_lines, raw, progress_grouping,
+                                )
                                 await _roll_progress_overflow_if_needed()
                         except Exception:
                             break

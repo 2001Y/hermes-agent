@@ -387,10 +387,11 @@ display:
   tool_progress: all    # off | new | all | verbose
   tool_progress_command: false  # set to true to enable /verbose in messaging
   # How progress is grouped on platforms that support message editing:
-  #   accumulate (default) — edit one bubble in place as tools run
+  #   accumulate (default) — edit one bubble in place as tools run, keeping history
+  #   latest               — edit one bubble to show only the newest tool
   #   separate             — send one message per tool (pre-v0.9 style; noisier)
   # Only applies where tool_progress is already enabled.
-  tool_progress_grouping: accumulate   # accumulate | separate
+  tool_progress_grouping: accumulate   # accumulate | latest | separate
 ```
 
 ### Message timestamps in model context

@@ -525,6 +525,30 @@ class TestToolProgressGrouping:
             == "separate"
         )
 
+    def test_latest_is_supported(self):
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"tool_progress_grouping": "latest"}}
+        assert (
+            resolve_display_setting(config, "matrix", "tool_progress_grouping")
+            == "latest"
+        )
+
+    def test_latest_replaces_previous_progress_line(self):
+        from gateway.display_config import update_tool_progress_lines
+
+        lines = update_tool_progress_lines([], "🔍 first", "latest")
+        lines = update_tool_progress_lines(lines, "⚙️ second", "latest")
+
+        assert lines == ["⚙️ second"]
+
+    def test_accumulate_appends_progress_line(self):
+        from gateway.display_config import update_tool_progress_lines
+
+        lines = update_tool_progress_lines(["🔍 first"], "⚙️ second", "accumulate")
+
+        assert lines == ["🔍 first", "⚙️ second"]
+
     def test_platform_override_wins(self):
         from gateway.display_config import resolve_display_setting
 
@@ -545,7 +569,7 @@ class TestToolProgressGrouping:
         )
 
     def test_invalid_value_falls_back_to_accumulate(self):
-        """_normalise rejects anything outside accumulate|separate."""
+        """_normalise rejects anything outside accumulate|latest|separate."""
         from gateway.display_config import resolve_display_setting
 
         config = {"display": {"tool_progress_grouping": "bogus"}}

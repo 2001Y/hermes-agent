@@ -1968,7 +1968,8 @@ DEFAULT_CONFIG = {
         # Custom/plugin/MCP tools always fall back to the raw preview.
         "friendly_tool_labels": True,
         # How gateway tool-progress is grouped on platforms that support message
-        # editing: "accumulate" (default) edits one bubble in place; "separate"
+        # editing: "accumulate" (default) edits one bubble in place with history;
+        # "latest" edits one bubble to show only the newest tool; "separate"
         # sends one message per tool (the pre-v0.9 behavior, noisier). Only
         # applies where tool_progress is already enabled. Per-platform override
         # via display.platforms.<platform>.tool_progress_grouping.
