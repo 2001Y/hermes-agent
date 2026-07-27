@@ -64,6 +64,14 @@ try:  # sibling module; support both package and flat plugin-dir import
 except ImportError:  # pragma: no cover - plugin loaded outside package context
     from block_kit import render_blocks, sanitize_blocks  # type: ignore
 
+try:
+    from ..profile_identity import resolve_profile_identity, resolve_profile_name
+except ImportError:  # pragma: no cover - plugin loaded outside package context
+    from plugins.platforms.profile_identity import (
+        resolve_profile_identity,
+        resolve_profile_name,
+    )
+
 
 logger = logging.getLogger(__name__)
 
@@ -717,25 +725,7 @@ _SLACK_PROFILE_IDENTITY_FIELDS = ("username", "icon_url", "icon_emoji")
 
 def _resolve_slack_sender_profile(metadata: Optional[Dict[str, Any]] = None) -> str:
     """Resolve the profile whose optional Slack identity should be used."""
-    if isinstance(metadata, dict):
-        profile = str(metadata.get("profile") or "").strip()
-        if profile:
-            return profile
-
-    profile = os.getenv("HERMES_PROFILE", "").strip()
-    if profile:
-        return profile
-
-    hermes_home = os.getenv("HERMES_HOME", "").strip()
-    if hermes_home:
-        try:
-            home_path = _Path(hermes_home)
-            if home_path.parent.name == "profiles" and home_path.name:
-                return home_path.name
-        except (OSError, ValueError):
-            pass
-
-    return "default"
+    return resolve_profile_name(metadata)
 
 
 def resolve_slack_profile_identity(
@@ -747,21 +737,11 @@ def resolve_slack_profile_identity(
     Invalid configuration is deliberately ignored: profile presentation must
     never prevent a message from reaching Slack.
     """
-    if not isinstance(config_extra, dict):
-        return {}
-    identities = config_extra.get("profile_identities")
-    if not isinstance(identities, dict):
-        return {}
-
-    identity = identities.get(_resolve_slack_sender_profile(metadata))
-    if not isinstance(identity, dict):
-        return {}
-
-    return {
-        key: value
-        for key in _SLACK_PROFILE_IDENTITY_FIELDS
-        if (value := str(identity.get(key) or "").strip())
-    }
+    return resolve_profile_identity(
+        config_extra,
+        metadata,
+        fields=_SLACK_PROFILE_IDENTITY_FIELDS,
+    )
 
 
 def _resolve_slack_proxy_url() -> Optional[str]:

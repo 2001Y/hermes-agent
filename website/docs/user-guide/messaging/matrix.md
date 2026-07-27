@@ -289,6 +289,34 @@ MATRIX_PASSWORD=***
 MATRIX_ALLOWED_USERS=@alice:matrix.example.org
 ```
 
+### Matrix Account Profile Identity
+
+Matrix supports an account-wide display name and avatar. Configure those values
+in `~/.hermes/config.yaml` under named Hermes profiles:
+
+```yaml
+matrix:
+  profile_identities:
+    default:
+      display_name: "Hermes"
+      # Use an existing mxc:// URI or a local file path. Remote HTTP URLs are rejected.
+      avatar: "~/.hermes/assets/hermes.png"
+    night:
+      display_name: "Hermes Night"
+      avatar: "mxc://matrix.example.org/media-id"
+```
+
+The active profile is selected from delivery metadata, `HERMES_PROFILE`, or the
+profile name in `HERMES_HOME`; `default` is the fallback. Unlike Slack's
+per-message identity fields, Matrix changes the bot account's profile across all
+rooms. One Matrix account cannot present different identities simultaneously.
+Local avatar files are uploaded to the homeserver before the profile is updated.
+Profile failures are non-fatal and do not block message delivery.
+
+When Matrix cron delivery runs out of process, set `MATRIX_USER_ID` explicitly
+so Hermes can address the account profile endpoint even when the access token's
+user ID has not been cached by a live gateway.
+
 ## Private Deployment Hardening
 
 For private Matrix deployments, set both user and room allowlists. If

@@ -133,7 +133,88 @@ from gateway.platforms.base import (
 )
 from gateway.platforms.helpers import ThreadParticipationTracker
 
+try:  # shared profile identity resolver; support flat plugin-dir imports
+    from ..profile_identity import resolve_profile_identity
+except ImportError:  # pragma: no cover - plugin loaded outside package context
+    from plugins.platforms.profile_identity import resolve_profile_identity
+
 logger = logging.getLogger(__name__)
+
+_MATRIX_PROFILE_IDENTITY_FIELDS = ("display_name", "avatar")
+
+
+def resolve_matrix_profile_identity(
+    config_extra: Optional[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, str]:
+    """Return the configured account identity for the active Hermes profile.
+
+    Matrix profile identity is account-wide: it changes the bot's Matrix
+    account profile, not an individual message sender. Invalid presentation
+    config is ignored so it cannot block message delivery.
+    """
+    return resolve_profile_identity(
+        config_extra,
+        metadata,
+        fields=_MATRIX_PROFILE_IDENTITY_FIELDS,
+    )
+
+
+def _matrix_profile_avatar_path(source: str) -> Path | None:
+    """Resolve a configured local avatar path, rejecting remote URLs."""
+    if source.startswith("mxc://"):
+        return None
+    if urlsplit(source).scheme in {"http", "https"}:
+        logger.warning("Matrix profile avatar must be an mxc:// URI or local path")
+        return None
+    path = Path(source).expanduser()
+    try:
+        if not path.is_file():
+            logger.warning("Matrix profile avatar file does not exist: %s", path)
+            return None
+    except OSError:
+        logger.warning("Could not inspect Matrix profile avatar file: %s", path)
+        return None
+    return path
+
+
+async def _apply_matrix_profile_identity(
+    client: Any,
+    identity: Dict[str, str],
+) -> None:
+    """Apply one Matrix account identity using mautrix's profile API."""
+    display_name = identity.get("display_name")
+    if display_name:
+        await client.set_displayname(display_name, check_current=True)
+
+    avatar_source = identity.get("avatar")
+    if not avatar_source:
+        return
+
+    if avatar_source.startswith("mxc://"):
+        avatar_url = avatar_source
+    else:
+        avatar_path = _matrix_profile_avatar_path(avatar_source)
+        if avatar_path is None:
+            return
+        data = avatar_path.read_bytes()
+        mime_type = (
+            mimetypes.guess_type(avatar_path.name)[0] or "application/octet-stream"
+        )
+        avatar_url = await client.upload_media(
+            data,
+            mime_type=mime_type,
+            filename=avatar_path.name,
+            size=len(data),
+        )
+
+    await client.set_avatar_url(avatar_url, check_current=True)
+
+
+def _log_matrix_profile_identity_failure(exc: Exception) -> None:
+    """Log profile failures without preventing the Matrix adapter from starting."""
+    logger.warning("Matrix profile identity update failed; continuing: %s", exc)
+
 
 _MATRIX_BANG_COMMAND_RE = re.compile(
     r"^!([A-Za-z][A-Za-z0-9_-]*)(?=$|\s)(.*)$",
@@ -1336,6 +1417,15 @@ class MatrixAdapter(BasePlatformAdapter):
             )
             await api.session.close()
             return False
+
+        # Profile identity is account-wide on Matrix. Apply it after auth but
+        # before syncing; a presentation failure must not prevent messaging.
+        configured_identity = resolve_matrix_profile_identity(self.config.extra)
+        if configured_identity:
+            try:
+                await _apply_matrix_profile_identity(client, configured_identity)
+            except Exception as exc:
+                _log_matrix_profile_identity_failure(exc)
 
         # Set up E2EE if requested.
         if self._encryption:
@@ -4551,6 +4641,70 @@ class MatrixAdapter(BasePlatformAdapter):
 # ──────────────────────────────────────────────────────────────────────────
 
 
+async def _apply_matrix_profile_identity_standalone(
+    session: Any,
+    homeserver: str,
+    token: str,
+    user_id: str,
+    identity: Dict[str, str],
+) -> None:
+    """Apply Matrix account identity for out-of-process cron delivery."""
+    from urllib.parse import quote
+
+    headers = {"Authorization": f"Bearer {token}"}
+    encoded_user_id = quote(user_id, safe="")
+    profile_url = f"{homeserver}/_matrix/client/v3/profile/{encoded_user_id}"
+
+    display_name = identity.get("display_name")
+    if display_name:
+        async with session.put(
+            f"{profile_url}/displayname",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"displayname": display_name},
+        ) as response:
+            if response.status not in {200, 201}:
+                body = await response.text()
+                raise RuntimeError(
+                    f"displayname update failed ({response.status}): {body}"
+                )
+
+    avatar_source = identity.get("avatar")
+    if not avatar_source:
+        return
+    if avatar_source.startswith("mxc://"):
+        avatar_url = avatar_source
+    else:
+        avatar_path = _matrix_profile_avatar_path(avatar_source)
+        if avatar_path is None:
+            return
+        data = avatar_path.read_bytes()
+        mime_type = (
+            mimetypes.guess_type(avatar_path.name)[0] or "application/octet-stream"
+        )
+        async with session.post(
+            f"{homeserver}/_matrix/media/v3/upload",
+            headers={**headers, "Content-Type": mime_type},
+            params={"filename": avatar_path.name},
+            data=data,
+        ) as response:
+            if response.status not in {200, 201}:
+                body = await response.text()
+                raise RuntimeError(f"avatar upload failed ({response.status}): {body}")
+            payload = await response.json()
+        avatar_url = str(payload.get("content_uri") or payload.get("mxc") or "")
+        if not avatar_url.startswith("mxc://"):
+            raise RuntimeError("avatar upload returned no mxc:// content URI")
+
+    async with session.put(
+        f"{profile_url}/avatar_url",
+        headers={**headers, "Content-Type": "application/json"},
+        json={"avatar_url": avatar_url},
+    ) as response:
+        if response.status not in {200, 201}:
+            body = await response.text()
+            raise RuntimeError(f"avatar update failed ({response.status}): {body}")
+
+
 async def _standalone_send(
     pconfig,
     chat_id,
@@ -4595,6 +4749,25 @@ async def _standalone_send(
             pass
 
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+            configured_identity = resolve_matrix_profile_identity(extra)
+            user_id = str(extra.get("user_id") or os.getenv("MATRIX_USER_ID", "")).strip()
+            if configured_identity and user_id:
+                try:
+                    await _apply_matrix_profile_identity_standalone(
+                        session,
+                        homeserver,
+                        token,
+                        user_id,
+                        configured_identity,
+                    )
+                except Exception as exc:
+                    _log_matrix_profile_identity_failure(exc)
+            elif configured_identity:
+                logger.warning(
+                    "Matrix profile identity is configured but MATRIX_USER_ID is unavailable; "
+                    "continuing with message delivery"
+                )
+
             async with session.put(url, headers=headers, json=payload) as resp:
                 if resp.status not in {200, 201}:
                     body = await resp.text()
@@ -4714,7 +4887,8 @@ def _apply_yaml_config(yaml_cfg: dict, matrix_cfg: dict) -> dict | None:
 
     Implements the apply_yaml_config_fn contract (#24849). Mirrors the legacy
     matrix_cfg block from gateway/config.py::load_gateway_config(). Env vars
-    take precedence over YAML. Returns None — everything flows through env.
+    take precedence over YAML. ``profile_identities`` remains structured in
+    ``PlatformConfig.extra`` because it is non-secret presentation config.
     """
     if "require_mention" in matrix_cfg and not os.getenv("MATRIX_REQUIRE_MENTION"):
         os.environ["MATRIX_REQUIRE_MENTION"] = str(matrix_cfg["require_mention"]).lower()
@@ -4748,7 +4922,17 @@ def _apply_yaml_config(yaml_cfg: dict, matrix_cfg: dict) -> dict | None:
         os.environ["MATRIX_DM_MENTION_THREADS"] = str(matrix_cfg["dm_mention_threads"]).lower()
     if "max_message_length" in matrix_cfg and not os.getenv("MATRIX_MAX_MESSAGE_LENGTH"):
         os.environ["MATRIX_MAX_MESSAGE_LENGTH"] = str(matrix_cfg["max_message_length"])
-    return None
+
+    identities = matrix_cfg.get("profile_identities")
+    if not isinstance(identities, dict):
+        return None
+    return {
+        "profile_identities": {
+            str(profile): identity
+            for profile, identity in identities.items()
+            if isinstance(identity, dict)
+        }
+    }
 
 
 def _is_connected(config) -> bool:
