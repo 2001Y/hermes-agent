@@ -48,8 +48,25 @@ are disabled, opportunistic, or required.
 | files | yes |
 | voice/audio | yes |
 | video | yes |
+| locations | yes |
 | E2EE | off / optional / required |
 | diagnostics | yes |
+
+### Location sharing
+
+Hermes receives explicit Matrix location shares after the Matrix event has been
+processed by the adapter's normal E2EE pipeline:
+
+- one-shot shares use `m.location` with a `geo_uri` such as `geo:35.681236,139.767125`
+- live shares use `m.beacon_info` state plus related `m.beacon` updates
+- stable and MSC3672 namespaced beacon event names are accepted
+- location shares bypass room mention gating, but room allowlists, ignored-user
+  filters, self-message filtering, and event deduplication still apply
+- the first live update is delivered immediately; later updates for one beacon
+  are coalesced for five seconds to avoid flooding the agent
+
+Matrix location events are room-scoped explicit shares. Hermes does not read a
+user device's GPS or a global Matrix profile location.
 
 ### Session Model in Matrix
 

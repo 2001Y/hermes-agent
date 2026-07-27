@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -304,6 +305,55 @@ class MatrixRoomIdentity:
     conflict: bool = False
 
 
+@dataclass(frozen=True)
+class _MatrixLocation:
+    """Validated location payload from a Matrix location or beacon event."""
+
+    uri: str
+    latitude: float
+    longitude: float
+    accuracy_m: float | None = None
+    description: str | None = None
+    timestamp_ms: int | None = None
+
+
+@dataclass(frozen=True)
+class _MatrixBeaconInfo:
+    """Validated live-location state from a Matrix beacon-info event."""
+
+    timeout_ms: int
+    live: bool
+    timestamp_ms: int
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class _MatrixBeaconEvent:
+    """Validated live-location update and its beacon-info relation."""
+
+    info_event_id: str
+    location: _MatrixLocation
+    content: dict
+
+
+@dataclass
+class _MatrixLiveBeacon:
+    """Runtime state for one active room-scoped Matrix beacon."""
+
+    room_id: str
+    sender: str
+    state_key: str
+    info_event_id: str
+    timeout_ms: int
+    started_at_ms: int
+    description: str | None = None
+    latest_timestamp_ms: int | None = None
+    thread_id: str | None = None
+    pending_event: _MatrixBeaconEvent | None = None
+    pending_event_id: str | None = None
+    update_task: asyncio.Task | None = None
+
+
 @dataclass
 class _MatrixProcessingReactionState:
     """Hermes-owned processing reactions for one Matrix target event."""
@@ -466,8 +516,24 @@ _MATRIX_CAPABILITIES: Dict[str, str] = {
     "voice/audio": "yes",
     "video": "yes",
     "E2EE": "off / optional / required",
+    "locations": "yes",
     "diagnostics": "yes",
 }
+
+_MATRIX_LOCATION_MSGTYPES = frozenset({
+    "m.location",
+    "org.matrix.msc3488.location",
+})
+_MATRIX_BEACON_INFO_EVENT_NAMES = (
+    "m.beacon_info",
+    "org.matrix.msc3672.beacon_info",
+)
+_MATRIX_BEACON_EVENT_NAMES = (
+    "m.beacon",
+    "org.matrix.msc3672.beacon",
+)
+_MATRIX_REFERENCE_RELATION = "m.reference"
+_MATRIX_LOCATION_UPDATE_COALESCE_SECONDS = 5.0
 
 
 def get_matrix_capabilities() -> Dict[str, str]:
@@ -518,6 +584,243 @@ def _matrix_event_timestamp_seconds(event: Any) -> float:
     if ts > 10_000_000_000:
         return ts / 1000.0
     return ts
+
+
+def _coerce_matrix_int(value: Any) -> int | None:
+    """Coerce only JSON integer/string values, never booleans or floats."""
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_matrix_location(content: Any) -> _MatrixLocation | None:
+    """Parse and validate a Matrix ``m.location``-compatible payload.
+
+    Element currently emits the stable ``m.location`` / ``geo_uri`` shape while
+    older MSC3488 clients may also include the namespaced nested object.  The
+    parser accepts both forms but fails closed for non-``geo:`` URIs, malformed
+    coordinates, and out-of-range latitude/longitude values.
+    """
+    if not isinstance(content, dict):
+        return None
+    msgtype = str(content.get("msgtype", "") or "")
+    if msgtype and msgtype not in _MATRIX_LOCATION_MSGTYPES:
+        return None
+
+    nested = content.get("m.location")
+    if not isinstance(nested, dict):
+        nested = content.get("org.matrix.msc3488.location")
+    if not isinstance(nested, dict):
+        nested = {}
+
+    uri = nested.get("uri") or content.get("geo_uri")
+    if not isinstance(uri, str) or not uri.startswith("geo:"):
+        return None
+    coordinate_text = uri[4:].split("?", 1)[0].split(";", 1)[0]
+    coordinates = coordinate_text.split(",", 1)
+    if len(coordinates) != 2:
+        return None
+    try:
+        latitude = float(coordinates[0])
+        longitude = float(coordinates[1])
+    except (TypeError, ValueError):
+        return None
+    if (
+        not math.isfinite(latitude)
+        or not math.isfinite(longitude)
+        or not -90 <= latitude <= 90
+        or not -180 <= longitude <= 180
+    ):
+        return None
+
+    accuracy_m = None
+    for parameter in uri[4:].split("?", 1)[0].split(";")[1:]:
+        if parameter.startswith("u="):
+            try:
+                parsed_accuracy = float(parameter[2:])
+            except (TypeError, ValueError):
+                parsed_accuracy = None
+            if parsed_accuracy is not None and math.isfinite(parsed_accuracy) and parsed_accuracy >= 0:
+                accuracy_m = parsed_accuracy
+            break
+
+    timestamp_raw = content.get("m.ts")
+    if timestamp_raw is None:
+        timestamp_raw = content.get("org.matrix.msc3488.ts")
+    timestamp_ms = _coerce_matrix_int(timestamp_raw)
+    if timestamp_ms is not None and timestamp_ms < 0:
+        timestamp_ms = None
+
+    description = nested.get("description") or content.get("body")
+    if description is not None:
+        description = str(description).strip() or None
+
+    return _MatrixLocation(
+        uri=uri,
+        latitude=latitude,
+        longitude=longitude,
+        accuracy_m=accuracy_m,
+        description=description,
+        timestamp_ms=timestamp_ms,
+    )
+
+
+def _matrix_beacon_live_value(content: Any) -> Any:
+    """Return the explicit live flag from stable or namespaced state content."""
+    if not isinstance(content, dict):
+        return None
+    for key in ("m.beacon_info", "org.matrix.msc3672.beacon_info"):
+        nested = content.get(key)
+        if isinstance(nested, dict) and "live" in nested:
+            return nested.get("live")
+    return content.get("live")
+
+
+def _parse_matrix_beacon_info(
+    content: Any,
+    *,
+    fallback_timestamp_ms: int | None = None,
+) -> _MatrixBeaconInfo | None:
+    """Parse stable and MSC3672 live-beacon state content."""
+    if not isinstance(content, dict):
+        return None
+    nested = content.get("m.beacon_info")
+    if not isinstance(nested, dict):
+        nested = content.get("org.matrix.msc3672.beacon_info")
+    values = nested if isinstance(nested, dict) else content
+
+    if values.get("live") is not True:
+        return None
+    try:
+        timeout_ms = _coerce_matrix_int(values.get("timeout"))
+    except (TypeError, ValueError):
+        return None
+    if timeout_ms is None or timeout_ms <= 0:
+        return None
+
+    timestamp_raw = content.get("m.ts")
+    if timestamp_raw is None:
+        timestamp_raw = content.get("org.matrix.msc3488.ts")
+    if timestamp_raw is None:
+        timestamp_raw = fallback_timestamp_ms
+    timestamp_ms = _coerce_matrix_int(timestamp_raw)
+    if timestamp_ms is None or timestamp_ms < 0:
+        return None
+
+    description = values.get("description")
+    if description is not None:
+        description = str(description).strip() or None
+    return _MatrixBeaconInfo(
+        timeout_ms=timeout_ms,
+        live=True,
+        timestamp_ms=timestamp_ms,
+        description=description,
+    )
+
+
+def _parse_matrix_beacon_event(content: Any) -> _MatrixBeaconEvent | None:
+    """Parse a beacon update and require an m.reference to beacon-info."""
+    if not isinstance(content, dict):
+        return None
+    relation = content.get("m.relates_to")
+    if not isinstance(relation, dict):
+        return None
+    if relation.get("rel_type") != _MATRIX_REFERENCE_RELATION:
+        return None
+    info_event_id = relation.get("event_id")
+    if not isinstance(info_event_id, str) or not info_event_id:
+        return None
+    location = _parse_matrix_location(content)
+    if location is None or location.timestamp_ms is None:
+        return None
+    return _MatrixBeaconEvent(
+        info_event_id=info_event_id,
+        location=location,
+        content=content,
+    )
+
+
+def _matrix_event_content(event: Any) -> dict:
+    """Serialize mautrix event content while keeping test doubles supported."""
+    content = getattr(event, "content", None)
+    if isinstance(content, dict):
+        return content
+    serialize = getattr(content, "serialize", None)
+    if callable(serialize):
+        try:
+            serialized = serialize()
+        except Exception:
+            return {}
+        return serialized if isinstance(serialized, dict) else {}
+    return {}
+
+
+def _matrix_event_type_name(event: Any) -> str:
+    event_type = getattr(event, "type", "")
+    return str(getattr(event_type, "t", event_type) or "")
+
+
+def _matrix_event_id(event: Any) -> str:
+    return str(getattr(event, "event_id", "") or "")
+
+
+def _matrix_event_sender(event: Any) -> str:
+    return str(getattr(event, "sender", "") or "")
+
+
+def _matrix_event_room_id(event: Any) -> str:
+    return str(getattr(event, "room_id", "") or "")
+
+
+def _matrix_event_timestamp_ms(event: Any) -> int:
+    timestamp = _coerce_matrix_int(getattr(event, "timestamp", None))
+    return timestamp if timestamp is not None else int(time.time() * 1000)
+
+
+def _matrix_custom_event_type(event_name: str, *, state: bool) -> Any:
+    """Return a mautrix custom EventType, with a string fallback for tests."""
+    finder = getattr(EventType, "find", None)
+    if not callable(finder):
+        return event_name
+    event_class = getattr(getattr(EventType, "Class", None), "STATE" if state else "MESSAGE", None)
+    try:
+        return finder(event_name, event_class)
+    except TypeError:
+        return finder(event_name)
+
+
+
+def _format_matrix_coordinate(value: float) -> str:
+    """Format a coordinate without adding noisy trailing zeroes."""
+    return format(value, ".12g")
+
+
+def _format_matrix_location_text(
+    location: _MatrixLocation,
+    sender_name: str,
+    *,
+    live: bool,
+) -> str:
+    """Build the model-facing text for an accepted Matrix location."""
+    latitude = _format_matrix_coordinate(location.latitude)
+    longitude = _format_matrix_coordinate(location.longitude)
+    label = "Live location update" if live else "Location shared"
+    lines = [
+        f"{label} by {sender_name or 'Matrix user'}.",
+        f"latitude: {latitude}",
+        f"longitude: {longitude}",
+        f"Map: https://www.google.com/maps/search/?api=1&query={latitude},{longitude}",
+    ]
+    if location.accuracy_m is not None:
+        lines.append(f"accuracy_m: {_format_matrix_coordinate(location.accuracy_m)}")
+    if location.timestamp_ms is not None:
+        lines.append(f"timestamp_ms: {location.timestamp_ms}")
+    if location.description:
+        lines.append(f"description: {location.description}")
+    return "\n".join(lines)
 
 
 def _create_matrix_session(proxy_url: str | None):
@@ -1003,6 +1306,14 @@ class MatrixAdapter(BasePlatformAdapter):
         # if that changes, add a config.yaml entry rather than an env var.
         self._reaction_redaction_delay_seconds = 5.0
         self._reaction_redaction_tasks: Set[asyncio.Task] = set()
+
+        # Matrix static/live location state.  The beacon cache is keyed by
+        # (room_id, beacon-info event_id); a second index by state_key lets us
+        # replace an older state event cleanly when a beacon is restarted.
+        self._matrix_live_beacons: Dict[tuple[str, str], _MatrixLiveBeacon] = {}
+        self._matrix_live_beacons_by_state: Dict[tuple[str, str], _MatrixLiveBeacon] = {}
+        self._matrix_location_update_coalesce_seconds = _MATRIX_LOCATION_UPDATE_COALESCE_SECONDS
+        self._matrix_location_tasks: Set[asyncio.Task] = set()
 
         # Proxy support — resolve once at init, reuse for all HTTP traffic.
         self._proxy_url: str | None = resolve_proxy_url(platform_env_var="MATRIX_PROXY")
@@ -1563,6 +1874,18 @@ class MatrixAdapter(BasePlatformAdapter):
             self._on_reaction,
             wait_sync=True,
         )
+        for event_name in _MATRIX_BEACON_INFO_EVENT_NAMES:
+            client.add_event_handler(
+                _matrix_custom_event_type(event_name, state=True),
+                self._on_beacon_info,
+                wait_sync=True,
+            )
+        for event_name in _MATRIX_BEACON_EVENT_NAMES:
+            client.add_event_handler(
+                _matrix_custom_event_type(event_name, state=False),
+                self._on_beacon,
+                wait_sync=True,
+            )
         client.add_event_handler(
             IntEvt.INVITE,
             self._on_invite,
@@ -1652,6 +1975,19 @@ class MatrixAdapter(BasePlatformAdapter):
         if redaction_tasks:
             await asyncio.gather(*redaction_tasks, return_exceptions=True)
         self._reaction_redaction_tasks.clear()
+
+        location_tasks = list(getattr(self, "_matrix_location_tasks", set()))
+        for task in location_tasks:
+            if not task.done():
+                task.cancel()
+        if location_tasks:
+            await asyncio.gather(*location_tasks, return_exceptions=True)
+        if hasattr(self, "_matrix_location_tasks"):
+            self._matrix_location_tasks.clear()
+        if hasattr(self, "_matrix_live_beacons"):
+            self._matrix_live_beacons.clear()
+        if hasattr(self, "_matrix_live_beacons_by_state"):
+            self._matrix_live_beacons_by_state.clear()
 
         # Close the SQLite crypto store database.
         if hasattr(self, "_crypto_db") and self._crypto_db:
@@ -2623,6 +2959,236 @@ class MatrixAdapter(BasePlatformAdapter):
             )
             return False
 
+    async def _prepare_matrix_location_event(self, event: Any) -> Optional[tuple]:
+        """Apply common safety/intake filters to location-related events."""
+        room_id = _matrix_event_room_id(event)
+        sender = _matrix_event_sender(event)
+        event_id = _matrix_event_id(event)
+        if self._is_self_sender(sender):
+            return None
+        if self._is_system_or_bridge_sender(sender):
+            return None
+        if self._matches_ignored_user_pattern(sender):
+            return None
+        if not await self._is_allowed_matrix_room_event(room_id):
+            return None
+        if self._is_duplicate_event(event_id):
+            return None
+        return room_id, sender, event_id, _matrix_event_timestamp_ms(event), _matrix_event_content(event)
+
+    def _remove_matrix_live_beacon(self, state: _MatrixLiveBeacon) -> None:
+        """Remove one beacon and cancel any delayed coalesced delivery."""
+        self._matrix_live_beacons.pop((state.room_id, state.info_event_id), None)
+        state_key = (state.room_id, state.state_key)
+        if self._matrix_live_beacons_by_state.get(state_key) is state:
+            self._matrix_live_beacons_by_state.pop(state_key, None)
+        task = state.update_task
+        if task is not None and not task.done():
+            task.cancel()
+        state.pending_event = None
+        state.pending_event_id = None
+
+    async def _deliver_matrix_beacon_status(
+        self,
+        state: _MatrixLiveBeacon,
+        event_id: str,
+        content: dict,
+    ) -> None:
+        """Tell the agent when an already tracked live share explicitly ends."""
+        ctx = await self._resolve_message_context(
+            state.room_id,
+            state.sender,
+            event_id,
+            "Live location sharing ended",
+            content,
+            {},
+            bypass_mention=True,
+            thread_id_override=state.thread_id,
+        )
+        if ctx is None:
+            return
+        _body, _is_dm, _chat_type, _thread_id, display_name, source = ctx
+        await self.handle_message(
+            MessageEvent(
+                text=f"Live location sharing ended for {display_name or 'Matrix user'}.",
+                message_type=MessageType.TEXT,
+                source=source,
+                raw_message=content,
+                message_id=event_id,
+                metadata={
+                    "matrix_location": {
+                        "live": False,
+                        "ended": True,
+                        "beacon_info_event_id": state.info_event_id,
+                        "state_key": state.state_key,
+                    }
+                },
+            )
+        )
+
+    async def _on_beacon_info(self, event: Any) -> None:
+        """Track a room-scoped Matrix live-location beacon state event."""
+        prepared = await self._prepare_matrix_location_event(event)
+        if prepared is None:
+            return
+        room_id, sender, event_id, event_ts_ms, content = prepared
+        if not event_id:
+            return
+        state_key = str(getattr(event, "state_key", "") or sender)
+        if state_key != sender:
+            logger.warning(
+                "Matrix: ignoring beacon-info %s with foreign state_key %s from %s",
+                event_id,
+                state_key,
+                sender,
+            )
+            return
+        info = _parse_matrix_beacon_info(content, fallback_timestamp_ms=event_ts_ms)
+        previous = self._matrix_live_beacons_by_state.pop((room_id, state_key), None)
+        if previous is not None:
+            self._remove_matrix_live_beacon(previous)
+        if info is None:
+            if previous is not None and _matrix_beacon_live_value(content) is False:
+                await self._deliver_matrix_beacon_status(previous, event_id, content)
+            return
+
+        state = _MatrixLiveBeacon(
+            room_id=room_id,
+            sender=sender,
+            state_key=state_key,
+            info_event_id=event_id,
+            timeout_ms=info.timeout_ms,
+            started_at_ms=info.timestamp_ms,
+            description=info.description,
+        )
+        self._matrix_live_beacons[(room_id, event_id)] = state
+        self._matrix_live_beacons_by_state[(room_id, state_key)] = state
+        logger.debug(
+            "Matrix: tracking live beacon %s in %s from %s for %dms",
+            event_id,
+            room_id,
+            sender,
+            info.timeout_ms,
+        )
+
+    @staticmethod
+    def _matrix_live_beacon_is_active(state: _MatrixLiveBeacon, now_ms: int | None = None) -> bool:
+        """Match Element's beacon liveness and future-clock tolerance."""
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+        start_ms = state.started_at_ms
+        if start_ms > now_ms:
+            start_ms -= 360000  # Element's six-minute future-clock leniency.
+        return start_ms <= now_ms <= state.started_at_ms + state.timeout_ms
+
+    def _schedule_matrix_beacon_flush(self, state: _MatrixLiveBeacon) -> None:
+        task = asyncio.create_task(self._flush_matrix_beacon_updates(state))
+        state.update_task = task
+        self._matrix_location_tasks.add(task)
+        task.add_done_callback(self._matrix_location_tasks.discard)
+
+    async def _flush_matrix_beacon_updates(self, state: _MatrixLiveBeacon) -> None:
+        """Flush only the newest pending update after the debounce window."""
+        try:
+            while True:
+                await asyncio.sleep(self._matrix_location_update_coalesce_seconds)
+                pending = state.pending_event
+                pending_event_id = state.pending_event_id
+                state.pending_event = None
+                state.pending_event_id = None
+                if pending is None:
+                    return
+                await self._deliver_matrix_beacon_location(
+                    state,
+                    pending,
+                    pending_event_id or "",
+                )
+        except asyncio.CancelledError:
+            raise
+        finally:
+            state.update_task = None
+
+    async def _deliver_matrix_beacon_location(
+        self,
+        state: _MatrixLiveBeacon,
+        beacon_event: _MatrixBeaconEvent,
+        event_id: str,
+    ) -> None:
+        location = beacon_event.location
+        body = state.description or "Live location update"
+        ctx = await self._resolve_message_context(
+            state.room_id,
+            state.sender,
+            event_id,
+            body,
+            beacon_event.content,
+            {},
+            bypass_mention=True,
+            thread_id_override=state.thread_id,
+        )
+        if ctx is None:
+            return
+        _body, _is_dm, _chat_type, thread_id, display_name, source = ctx
+        if state.thread_id is None and thread_id:
+            # Use the first regular timeline event as the root; a state event
+            # is not a valid Matrix thread root for outbound replies.
+            state.thread_id = thread_id
+        await self.handle_message(
+            MessageEvent(
+                text=_format_matrix_location_text(location, display_name, live=True),
+                message_type=MessageType.LOCATION,
+                source=source,
+                raw_message=beacon_event.content,
+                message_id=event_id,
+                metadata={
+                    "matrix_location": {
+                        "uri": location.uri,
+                        "latitude": location.latitude,
+                        "longitude": location.longitude,
+                        "accuracy_m": location.accuracy_m,
+                        "description": location.description or state.description,
+                        "timestamp_ms": location.timestamp_ms,
+                        "live": True,
+                        "beacon_info_event_id": state.info_event_id,
+                        "state_key": state.state_key,
+                        "timeout_ms": state.timeout_ms,
+                    }
+                },
+            )
+        )
+
+    async def _on_beacon(self, event: Any) -> None:
+        """Accept an in-period, owner-authored Matrix live-location update."""
+        prepared = await self._prepare_matrix_location_event(event)
+        if prepared is None:
+            return
+        room_id, sender, event_id, _event_ts_ms, content = prepared
+        if not event_id:
+            return
+        beacon_event = _parse_matrix_beacon_event(content)
+        if beacon_event is None:
+            return
+        state = self._matrix_live_beacons.get((room_id, beacon_event.info_event_id))
+        if state is None or sender != state.sender or sender != state.state_key:
+            return
+        if not self._matrix_live_beacon_is_active(state):
+            return
+        timestamp_ms = beacon_event.location.timestamp_ms
+        if timestamp_ms is None or timestamp_ms <= state.started_at_ms:
+            return
+        if timestamp_ms > state.started_at_ms + state.timeout_ms:
+            return
+        if state.latest_timestamp_ms is not None and timestamp_ms <= state.latest_timestamp_ms:
+            return
+        state.latest_timestamp_ms = timestamp_ms
+
+        if state.update_task is not None and not state.update_task.done():
+            state.pending_event = beacon_event
+            state.pending_event_id = event_id
+            return
+        await self._deliver_matrix_beacon_location(state, beacon_event, event_id)
+        self._schedule_matrix_beacon_flush(state)
+
     async def _on_room_message(self, event: Any) -> None:
         """Handle incoming room message events (text, media)."""
         room_id = str(getattr(event, "room_id", ""))
@@ -2759,6 +3325,10 @@ class MatrixAdapter(BasePlatformAdapter):
             await self._handle_media_message(
                 room_id, sender, event_id, event_ts, source_content, relates_to, msgtype
             )
+        elif msgtype in _MATRIX_LOCATION_MSGTYPES:
+            await self._handle_location_message(
+                room_id, sender, event_id, event_ts, source_content, relates_to
+            )
         elif msgtype in ("m.text", "m.notice"):
             await self._handle_text_message(
                 room_id, sender, event_id, event_ts, source_content, relates_to
@@ -2772,6 +3342,9 @@ class MatrixAdapter(BasePlatformAdapter):
         body: str,
         source_content: dict,
         relates_to: dict,
+        *,
+        bypass_mention: bool = False,
+        thread_id_override: str | None = None,
     ) -> Optional[tuple]:
         """Shared mention/thread/DM gating for text and media handlers.
 
@@ -2808,33 +3381,34 @@ class MatrixAdapter(BasePlatformAdapter):
                 )
                 return None
 
-            is_free_room = room_id in self._free_rooms
-            in_bot_thread = bool(thread_id and thread_id in self._threads)
-            is_command = body.startswith("/")
-            if self._require_mention and not is_free_room and not in_bot_thread:
-                if not is_mentioned and not is_command:
-                    logger.debug(
-                        "Matrix: ignoring message %s in %s — no @mention "
-                        "(set MATRIX_REQUIRE_MENTION=false to disable)",
-                        event_id,
-                        room_id,
-                    )
-                    return None
+            if not bypass_mention:
+                is_free_room = room_id in self._free_rooms
+                in_bot_thread = bool(thread_id and thread_id in self._threads)
+                is_command = body.startswith("/")
+                if self._require_mention and not is_free_room and not in_bot_thread:
+                    if not is_mentioned and not is_command:
+                        logger.debug(
+                            "Matrix: ignoring message %s in %s — no @mention "
+                            "(set MATRIX_REQUIRE_MENTION=false to disable)",
+                            event_id,
+                            room_id,
+                        )
+                        return None
 
-            # Thread-level @mention gating: even in a bot-participated thread,
-            # require @mention when thread_require_mention is enabled.
-            # Prevents infinite reply loops in multi-agent shared rooms
-            # where multiple bots all participate in the same thread.
-            elif (self._thread_require_mention and in_bot_thread
-                  and not is_free_room):
-                if not is_mentioned:
-                    logger.debug(
-                        "Matrix: ignoring message %s in thread %s — "
-                        "no @mention (thread_require_mention=true)",
-                        event_id,
-                        thread_id,
-                    )
-                    return None
+                # Thread-level @mention gating: even in a bot-participated thread,
+                # require @mention when thread_require_mention is enabled.
+                # Prevents infinite reply loops in multi-agent shared rooms
+                # where multiple bots all participate in the same thread.
+                elif (self._thread_require_mention and in_bot_thread
+                      and not is_free_room):
+                    if not is_mentioned:
+                        logger.debug(
+                            "Matrix: ignoring message %s in thread %s — "
+                            "no @mention (thread_require_mention=true)",
+                            event_id,
+                            thread_id,
+                        )
+                        return None
 
         # DM mention-thread.
         if is_dm and not thread_id and self._dm_mention_threads and is_mentioned:
@@ -2842,12 +3416,14 @@ class MatrixAdapter(BasePlatformAdapter):
             self._threads.mark(thread_id)
 
         # Strip mention from body (only when mention-gating is active).
-        if is_mentioned and self._require_mention:
+        if is_mentioned and self._require_mention and not bypass_mention:
             body = self._strip_mention(body)
 
         # Auto-thread/session-scope policy. Real Matrix thread roots are
         # preserved above; synthetic thread roots are policy-driven.
-        if not thread_id:
+        if thread_id_override:
+            thread_id = thread_id_override
+        elif not thread_id:
             if is_dm:
                 if self._dm_auto_thread:
                     thread_id = event_id
@@ -2881,6 +3457,55 @@ class MatrixAdapter(BasePlatformAdapter):
         self._background_read_receipt(room_id, event_id)
 
         return body, is_dm, chat_type, thread_id, display_name, source
+
+    async def _handle_location_message(
+        self,
+        room_id: str,
+        sender: str,
+        event_id: str,
+        event_ts: float,
+        source_content: dict,
+        relates_to: dict,
+    ) -> None:
+        """Process an explicitly shared static Matrix location."""
+        location = _parse_matrix_location(source_content)
+        if location is None:
+            logger.warning("Matrix: dropping malformed location event %s", event_id)
+            return
+
+        body = str(source_content.get("body", "") or "Location shared")
+        ctx = await self._resolve_message_context(
+            room_id,
+            sender,
+            event_id,
+            body,
+            source_content,
+            relates_to,
+            bypass_mention=True,
+        )
+        if ctx is None:
+            return
+        _body, _is_dm, _chat_type, _thread_id, display_name, source = ctx
+        await self.handle_message(
+            MessageEvent(
+                text=_format_matrix_location_text(location, display_name, live=False),
+                message_type=MessageType.LOCATION,
+                source=source,
+                raw_message=source_content,
+                message_id=event_id,
+                metadata={
+                    "matrix_location": {
+                        "uri": location.uri,
+                        "latitude": location.latitude,
+                        "longitude": location.longitude,
+                        "accuracy_m": location.accuracy_m,
+                        "description": location.description,
+                        "timestamp_ms": location.timestamp_ms,
+                        "live": False,
+                    }
+                },
+            )
+        )
 
     async def _handle_text_message(
         self,

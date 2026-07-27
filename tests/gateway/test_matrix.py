@@ -379,6 +379,407 @@ def _make_adapter():
 
 
 # ---------------------------------------------------------------------------
+# Matrix location parsing and dispatch
+# ---------------------------------------------------------------------------
+
+class TestMatrixLocationParsing:
+    def test_parse_static_location_accepts_stable_wire_shape(self):
+        from plugins.platforms.matrix.adapter import _parse_matrix_location
+
+        location = _parse_matrix_location({
+            "msgtype": "m.location",
+            "body": "At the office",
+            "geo_uri": "geo:35.681236,139.767125;u=12",
+            "m.ts": 1730000000000,
+        })
+
+        assert location is not None
+        assert location.uri == "geo:35.681236,139.767125;u=12"
+        assert location.latitude == pytest.approx(35.681236)
+        assert location.longitude == pytest.approx(139.767125)
+        assert location.accuracy_m == pytest.approx(12)
+        assert location.timestamp_ms == 1730000000000
+        assert location.description == "At the office"
+
+    def test_parse_static_location_rejects_non_geo_uri(self):
+        from plugins.platforms.matrix.adapter import _parse_matrix_location
+
+        assert _parse_matrix_location({
+            "msgtype": "m.location",
+            "geo_uri": "https://example.org/not-a-location",
+        }) is None
+
+
+class TestMatrixLocationDispatch:
+    def setup_method(self):
+        self.adapter = _make_adapter()
+        self.adapter._user_id = "@bot:example.org"
+        self.adapter._startup_ts = 0.0
+        self.adapter._is_allowed_matrix_room_event = AsyncMock(return_value=True)
+        self.adapter._get_display_name = AsyncMock(return_value="Alice")
+        self.adapter._background_read_receipt = MagicMock()
+        self.adapter._auto_thread = False
+        self.adapter._require_mention = True
+        self.adapter._free_rooms = set()
+        self.adapter._allowed_rooms = set()
+
+    @pytest.mark.asyncio
+    async def test_static_location_bypasses_mention_and_reaches_agent(self):
+        captured = []
+
+        async def capture(event):
+            captured.append(event)
+
+        self.adapter.handle_message = capture
+        content = {
+            "msgtype": "m.location",
+            "body": "Alice's location",
+            "geo_uri": "geo:35.681236,139.767125",
+        }
+        event = types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            event_id="$location1",
+            timestamp=int(time.time() * 1000),
+            content=content,
+        )
+
+        await self.adapter._on_room_message(event)
+
+        assert len(captured) == 1
+        assert captured[0].message_type is MessageType.LOCATION
+        assert "35.681236" in captured[0].text
+        assert "139.767125" in captured[0].text
+        assert "https://www.google.com/maps/search/?api=1&query=35.681236,139.767125" in captured[0].text
+        assert captured[0].raw_message == content
+        assert captured[0].metadata["matrix_location"]["live"] is False
+
+    @pytest.mark.asyncio
+    async def test_malformed_static_location_is_dropped(self):
+        self.adapter.handle_message = AsyncMock()
+        event = types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            event_id="$bad-location",
+            timestamp=int(time.time() * 1000),
+            content={"msgtype": "m.location", "geo_uri": "geo:999,999"},
+        )
+
+        await self.adapter._on_room_message(event)
+
+        self.adapter.handle_message.assert_not_awaited()
+
+
+class TestMatrixBeaconParsing:
+    def test_parse_live_beacon_info_accepts_namespaced_wire_shape(self):
+        from plugins.platforms.matrix.adapter import _parse_matrix_beacon_info
+
+        info = _parse_matrix_beacon_info({
+            "org.matrix.msc3672.beacon_info": {
+                "description": "Alice tracker",
+                "timeout": 600000,
+                "live": True,
+            },
+            "org.matrix.msc3488.ts": 1730000000000,
+        })
+
+        assert info is not None
+        assert info.description == "Alice tracker"
+        assert info.timeout_ms == 600000
+        assert info.live is True
+        assert info.timestamp_ms == 1730000000000
+
+    def test_parse_beacon_update_requires_reference_relation(self):
+        from plugins.platforms.matrix.adapter import _parse_matrix_beacon_event
+
+        parsed = _parse_matrix_beacon_event({
+            "m.relates_to": {"rel_type": "m.reference", "event_id": "$info"},
+            "m.location": {"uri": "geo:35.0,139.0"},
+            "m.ts": 1730000001000,
+        })
+
+        assert parsed is not None
+        assert parsed.info_event_id == "$info"
+        assert parsed.location.latitude == pytest.approx(35.0)
+        assert parsed.location.timestamp_ms == 1730000001000
+
+        assert _parse_matrix_beacon_event({
+            "m.relates_to": {"rel_type": "m.in_reply_to", "event_id": "$info"},
+            "m.location": {"uri": "geo:35.0,139.0"},
+            "m.ts": 1730000001000,
+        }) is None
+
+    def test_parse_beacon_info_rejects_non_live_or_invalid_timeout(self):
+        from plugins.platforms.matrix.adapter import _parse_matrix_beacon_info
+
+        base = {"m.ts": 1730000000000}
+        assert _parse_matrix_beacon_info({
+            **base,
+            "m.beacon_info": {"timeout": 600000, "live": False},
+        }) is None
+        assert _parse_matrix_beacon_info({
+            **base,
+            "m.beacon_info": {"timeout": 0, "live": True},
+        }) is None
+
+    def test_event_content_serializer_matches_e2ee_post_decryption_shape(self):
+        from plugins.platforms.matrix.adapter import _matrix_event_content
+
+        class SerializedContent:
+            def serialize(self):
+                return {"m.beacon_info": {"timeout": 600000, "live": True}}
+
+        assert _matrix_event_content(types.SimpleNamespace(content=SerializedContent())) == {
+            "m.beacon_info": {"timeout": 600000, "live": True}
+        }
+
+    def test_custom_beacon_event_types_preserve_mautrix_state_and_message_classes(self):
+        from mautrix.types import EventType
+        from plugins.platforms.matrix.adapter import _matrix_custom_event_type
+
+        info = _matrix_custom_event_type("m.beacon_info", state=True)
+        beacon = _matrix_custom_event_type("m.beacon", state=False)
+
+        assert info.t == "m.beacon_info"
+        assert info.t_class is EventType.Class.STATE
+        assert beacon.t == "m.beacon"
+        assert beacon.t_class is EventType.Class.MESSAGE
+
+
+class TestMatrixBeaconDispatch:
+    def setup_method(self):
+        self.adapter = _make_adapter()
+        self.adapter._user_id = "@bot:example.org"
+        self.adapter._startup_ts = 0.0
+        self.adapter._is_allowed_matrix_room_event = AsyncMock(return_value=True)
+        self.adapter._get_display_name = AsyncMock(return_value="Alice")
+        self.adapter._background_read_receipt = MagicMock()
+        self.adapter._auto_thread = False
+        self.adapter._require_mention = True
+        self.adapter._free_rooms = set()
+        self.adapter._allowed_rooms = set()
+
+    @pytest.mark.asyncio
+    async def test_live_beacon_info_is_state_only_until_update_arrives(self):
+        captured = []
+
+        async def capture(event):
+            captured.append(event)
+
+        self.adapter.handle_message = capture
+        started_ms = int(time.time() * 1000) - 1000
+        info_event = types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            state_key="@alice:example.org",
+            event_id="$beacon-info",
+            timestamp=started_ms,
+            content={"m.beacon_info": {"timeout": 600000, "live": True}, "m.ts": started_ms},
+            type="m.beacon_info",
+        )
+
+        await self.adapter._on_beacon_info(info_event)
+
+        assert captured == []
+        assert ("!room:example.org", "$beacon-info") in self.adapter._matrix_live_beacons
+
+        location_event = types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            event_id="$beacon-location-1",
+            timestamp=started_ms + 1000,
+            content={
+                "m.relates_to": {"rel_type": "m.reference", "event_id": "$beacon-info"},
+                "m.location": {"uri": "geo:35.681236,139.767125"},
+                "m.ts": started_ms + 1000,
+            },
+            type="m.beacon",
+        )
+
+        await self.adapter._on_beacon(location_event)
+
+        assert len(captured) == 1
+        assert captured[0].message_type is MessageType.LOCATION
+        assert captured[0].metadata["matrix_location"]["live"] is True
+        assert captured[0].metadata["matrix_location"]["beacon_info_event_id"] == "$beacon-info"
+
+    @pytest.mark.asyncio
+    async def test_explicit_live_stop_notifies_agent_and_clears_state(self):
+        captured = []
+
+        async def capture(event):
+            captured.append(event)
+
+        self.adapter.handle_message = capture
+        started_ms = int(time.time() * 1000) - 1000
+        await self.adapter._on_beacon_info(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            state_key="@alice:example.org",
+            event_id="$stop-info-start",
+            timestamp=started_ms,
+            content={"m.beacon_info": {"timeout": 600000, "live": True}, "m.ts": started_ms},
+            type="m.beacon_info",
+        ))
+
+        await self.adapter._on_beacon_info(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            state_key="@alice:example.org",
+            event_id="$stop-info-end",
+            timestamp=started_ms + 1000,
+            content={"m.beacon_info": {"timeout": 600000, "live": False}, "m.ts": started_ms + 1000},
+            type="m.beacon_info",
+        ))
+
+        assert ("!room:example.org", "$stop-info-start") not in self.adapter._matrix_live_beacons
+        assert len(captured) == 1
+        assert captured[0].message_type is MessageType.TEXT
+        assert "sharing ended" in captured[0].text
+        assert captured[0].metadata["matrix_location"]["ended"] is True
+
+    @pytest.mark.asyncio
+    async def test_expired_beacon_update_is_dropped(self):
+        self.adapter.handle_message = AsyncMock()
+        started_ms = int(time.time() * 1000) - 120000
+        info_event = types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            state_key="@alice:example.org",
+            event_id="$expired-info",
+            timestamp=started_ms,
+            content={"m.beacon_info": {"timeout": 60000, "live": True}, "m.ts": started_ms},
+            type="m.beacon_info",
+        )
+        await self.adapter._on_beacon_info(info_event)
+
+        await self.adapter._on_beacon(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            event_id="$expired-location",
+            timestamp=int(time.time() * 1000),
+            content={
+                "m.relates_to": {"rel_type": "m.reference", "event_id": "$expired-info"},
+                "m.location": {"uri": "geo:35.0,139.0"},
+                "m.ts": int(time.time() * 1000),
+            },
+            type="m.beacon",
+        ))
+
+        self.adapter.handle_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_beacon_timestamp_outside_declared_duration_is_dropped(self):
+        self.adapter.handle_message = AsyncMock()
+        started_ms = int(time.time() * 1000) - 1000
+        await self.adapter._on_beacon_info(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            state_key="@alice:example.org",
+            event_id="$range-info",
+            timestamp=started_ms,
+            content={"m.beacon_info": {"timeout": 600000, "live": True}, "m.ts": started_ms},
+            type="m.beacon_info",
+        ))
+
+        out_of_range_ms = started_ms + 600001
+        await self.adapter._on_beacon(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            event_id="$range-location",
+            timestamp=out_of_range_ms,
+            content={
+                "m.relates_to": {"rel_type": "m.reference", "event_id": "$range-info"},
+                "m.location": {"uri": "geo:35.0,139.0"},
+                "m.ts": out_of_range_ms,
+            },
+            type="m.beacon",
+        ))
+
+        self.adapter.handle_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_beacon_update_from_different_sender_is_dropped(self):
+        self.adapter.handle_message = AsyncMock()
+        started_ms = int(time.time() * 1000) - 1000
+        await self.adapter._on_beacon_info(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            state_key="@alice:example.org",
+            event_id="$owned-info",
+            timestamp=started_ms,
+            content={"m.beacon_info": {"timeout": 600000, "live": True}, "m.ts": started_ms},
+            type="m.beacon_info",
+        ))
+
+        await self.adapter._on_beacon(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@mallory:example.org",
+            event_id="$spoofed-location",
+            timestamp=started_ms + 1000,
+            content={
+                "m.relates_to": {"rel_type": "m.reference", "event_id": "$owned-info"},
+                "m.location": {"uri": "geo:0,0"},
+                "m.ts": started_ms + 1000,
+            },
+            type="m.beacon",
+        ))
+
+        self.adapter.handle_message.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_followup_beacon_updates_are_coalesced_and_old_updates_rejected(self):
+        captured = []
+
+        async def capture(event):
+            captured.append(event)
+
+        self.adapter.handle_message = capture
+        self.adapter._matrix_location_update_coalesce_seconds = 0.01
+        started_ms = int(time.time() * 1000) - 1000
+        await self.adapter._on_beacon_info(types.SimpleNamespace(
+            room_id="!room:example.org",
+            sender="@alice:example.org",
+            state_key="@alice:example.org",
+            event_id="$coalesce-info",
+            timestamp=started_ms,
+            content={"m.beacon_info": {"timeout": 600000, "live": True}, "m.ts": started_ms},
+            type="m.beacon_info",
+        ))
+
+        def beacon(event_id, timestamp_ms, latitude):
+            return types.SimpleNamespace(
+                room_id="!room:example.org",
+                sender="@alice:example.org",
+                event_id=event_id,
+                timestamp=timestamp_ms,
+                content={
+                    "m.relates_to": {"rel_type": "m.reference", "event_id": "$coalesce-info"},
+                    "m.location": {"uri": f"geo:{latitude},139.0"},
+                    "m.ts": timestamp_ms,
+                },
+                type="m.beacon",
+            )
+
+        await self.adapter._on_beacon(beacon("$location-1", started_ms + 1000, 35.0))
+        await self.adapter._on_beacon(beacon("$location-2", started_ms + 2000, 36.0))
+        await self.adapter._on_beacon(beacon("$location-old", started_ms + 1500, 37.0))
+
+        assert len(captured) == 1
+        assert captured[0].message_id == "$location-1"
+        await asyncio.sleep(0.03)
+
+        assert len(captured) == 2
+        assert captured[1].message_id == "$location-2"
+        assert "latitude: 36" in captured[1].text
+
+        task = self.adapter._matrix_live_beacons[("!room:example.org", "$coalesce-info")].update_task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+# ---------------------------------------------------------------------------
 # Typing indicator
 # ---------------------------------------------------------------------------
 
@@ -2579,6 +2980,7 @@ class TestMatrixDiagnostics:
             "voice/audio": "yes",
             "video": "yes",
             "E2EE": "off / optional / required",
+            "locations": "yes",
             "diagnostics": "yes",
         }
 
@@ -2598,6 +3000,7 @@ class TestMatrixDiagnostics:
             "files": "send_document",
             "voice/audio": "send_voice",
             "video": "send_video",
+            "locations": "_handle_location_message",
             "diagnostics": "get_diagnostics",
         }
 
