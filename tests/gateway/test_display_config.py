@@ -549,6 +549,20 @@ class TestToolProgressGrouping:
 
         assert lines == ["🔍 first", "⚙️ second"]
 
+    def test_latest_suppresses_repeat_count_event(self):
+        from gateway.display_config import build_tool_progress_dedup_event
+
+        assert build_tool_progress_dedup_event("⚙️ same", 1, "latest") is None
+
+    def test_non_latest_grouping_keeps_repeat_count_event(self):
+        from gateway.display_config import build_tool_progress_dedup_event
+
+        assert build_tool_progress_dedup_event("⚙️ same", 1, "accumulate") == (
+            "__dedup__",
+            "⚙️ same",
+            1,
+        )
+
     def test_platform_override_wins(self):
         from gateway.display_config import resolve_display_setting
 

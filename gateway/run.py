@@ -19114,6 +19114,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # which checks display.platforms.<platform>.<key> first, then
         # display.<key> global, then built-in platform defaults.
         from gateway.display_config import (
+            build_tool_progress_dedup_event,
             resolve_display_setting,
             update_tool_progress_lines,
         )
@@ -19556,7 +19557,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 repeat_count[0] += 1
                 # Update the last line in progress_lines with a counter
                 # via a special "dedup" queue message.
-                progress_queue.put(("__dedup__", msg, repeat_count[0]))
+                _dedup_event = build_tool_progress_dedup_event(
+                    msg, repeat_count[0], progress_grouping,
+                )
+                if _dedup_event is not None:
+                    progress_queue.put(_dedup_event)
                 return
             last_progress_msg[0] = msg
             repeat_count[0] = 0

@@ -311,3 +311,17 @@ def update_tool_progress_lines(
     if grouping == "latest":
         return [message]
     return [*lines, message]
+
+
+def build_tool_progress_dedup_event(
+    message: Any, repeat_count: int, grouping: str,
+) -> tuple[str, Any, int] | None:
+    """Build the repeat event for an identical progress message.
+
+    ``latest`` already shows the one current line, so a repeat counter would
+    reintroduce historical call-count information into the latest-only view.
+    The history-preserving modes keep the existing counter event.
+    """
+    if grouping == "latest":
+        return None
+    return ("__dedup__", message, repeat_count)
