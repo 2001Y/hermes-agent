@@ -428,7 +428,7 @@ class TestAdapterToSessionKeyIntegration:
         adapter.send.assert_awaited_once_with(
             "-1001234567890",
             "routed reply",
-            metadata=None,
+            metadata={"profile": "ops"},
         )
 
     def test_adapter_without_runner_falls_back_to_default_namespace(self, mock_runner):
