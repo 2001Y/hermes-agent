@@ -115,33 +115,6 @@ class MetadataEditProgressCaptureAdapter(ProgressCaptureAdapter):
         return SendResult(success=True, message_id=message_id)
 
 
-class RetryableFirstEditProgressCaptureAdapter(ProgressCaptureAdapter):
-    """Fail one progress edit transiently, then accept later edits."""
-
-    def __init__(self, platform=Platform.TELEGRAM):
-        super().__init__(platform=platform)
-        self.edit_outcomes = []
-
-    async def edit_message(self, chat_id, message_id, content) -> SendResult:
-        self.edits.append(
-            {
-                "chat_id": chat_id,
-                "message_id": message_id,
-                "content": content,
-            }
-        )
-        if not self.edit_outcomes:
-            self.edit_outcomes.append(False)
-            return SendResult(
-                success=False,
-                error="temporary network failure",
-                retryable=True,
-                error_kind="transient",
-            )
-        self.edit_outcomes.append(True)
-        return SendResult(success=True, message_id=message_id)
-
-
 class RetryableOverflowEditProgressAdapter(SmallLimitProgressAdapter):
     """Fail the first split edit transiently, then keep editing."""
 
@@ -173,6 +146,169 @@ class NonEditingProgressCaptureAdapter(ProgressCaptureAdapter):
 
     async def edit_message(self, chat_id, message_id, content) -> SendResult:
         raise AssertionError("non-editable adapters should not receive edit_message calls")
+
+
+class RetryableFirstEditProgressCaptureAdapter(ProgressCaptureAdapter):
+    def __init__(self, platform=Platform.TELEGRAM):
+        super().__init__(platform)
+        self._first_edit_is_retryable = True
+        self.edit_outcomes = []
+        self.successful_edits = []
+
+    async def edit_message(self, chat_id, message_id, content) -> SendResult:
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "content": content,
+            }
+        )
+        if self._first_edit_is_retryable:
+            self._first_edit_is_retryable = False
+            self.edit_outcomes.append(False)
+            return SendResult(
+                success=False,
+                error="timed out",
+                retryable=True,
+                error_kind="transient",
+            )
+        self.edit_outcomes.append(True)
+        self.successful_edits.append(content)
+        return SendResult(success=True, message_id=message_id)
+
+
+class RetryableEditsUntilStopAdapter(ProgressCaptureAdapter):
+    """Recover pending status only when a later dirty-buffer edit succeeds."""
+
+    def __init__(self, platform=Platform.TELEGRAM):
+        super().__init__(platform)
+        self._edit_attempts = 0
+        self.successful_edits = []
+
+    async def edit_message(self, chat_id, message_id, content) -> SendResult:
+        self._edit_attempts += 1
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "content": content,
+            }
+        )
+        if self._edit_attempts <= 2:
+            return SendResult(
+                success=False,
+                error="timed out",
+                retryable=True,
+                error_kind="transient",
+            )
+        self.successful_edits.append(content)
+        return SendResult(success=True, message_id=message_id)
+
+
+class RetryableFirstEditSmallLimitAdapter(SmallLimitProgressAdapter):
+    def __init__(self, platform=Platform.TELEGRAM):
+        super().__init__(platform)
+        self._first_edit_is_retryable = True
+        self.successful_edits = []
+
+    async def edit_message(self, chat_id, message_id, content) -> SendResult:
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "content": content,
+            }
+        )
+        if len(content) > self.MAX_MESSAGE_LENGTH:
+            self.oversized_edits.append(content)
+        if self._first_edit_is_retryable:
+            self._first_edit_is_retryable = False
+            return SendResult(
+                success=False,
+                error="timed out",
+                retryable=True,
+                error_kind="transient",
+            )
+        self.successful_edits.append(content)
+        return SendResult(success=True, message_id=message_id)
+
+
+class PermanentFirstEditProgressCaptureAdapter(ProgressCaptureAdapter):
+    def __init__(self, platform=Platform.TELEGRAM):
+        super().__init__(platform)
+        self._first_edit_is_permanent = True
+
+    async def edit_message(self, chat_id, message_id, content) -> SendResult:
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "content": content,
+            }
+        )
+        if self._first_edit_is_permanent:
+            self._first_edit_is_permanent = False
+            return SendResult(
+                success=False,
+                error="message_not_found",
+                retryable=False,
+                error_kind="permanent",
+            )
+        return SendResult(success=True, message_id=message_id)
+
+
+class TimedEditProgressCaptureAdapter(ProgressCaptureAdapter):
+    def __init__(self, platform=Platform.TELEGRAM):
+        super().__init__(platform)
+        self.edit_times = []
+
+    async def edit_message(self, chat_id, message_id, content) -> SendResult:
+        self.edit_times.append(time.monotonic())
+        return await super().edit_message(chat_id, message_id, content)
+
+
+class RetryableTimedEditProgressCaptureAdapter(ProgressCaptureAdapter):
+    def __init__(self, platform=Platform.TELEGRAM):
+        super().__init__(platform)
+        self._edit_attempts = 0
+        self.edit_times = []
+        self.successful_edit_times = []
+
+    async def edit_message(self, chat_id, message_id, content) -> SendResult:
+        self._edit_attempts += 1
+        now = time.monotonic()
+        self.edit_times.append(now)
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "content": content,
+            }
+        )
+        if self._edit_attempts <= 2:
+            return SendResult(
+                success=False,
+                error="timed out",
+                retryable=True,
+                error_kind="transient",
+            )
+        self.successful_edit_times.append(now)
+        return SendResult(success=True, message_id=message_id)
+
+
+class HangingEditProgressCaptureAdapter(ProgressCaptureAdapter):
+    """Block every edit until the sender cleanup cancels it."""
+
+    async def edit_message(self, chat_id, message_id, content) -> SendResult:
+        self.edits.append(
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "content": content,
+            }
+        )
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
 
 
 class FakeAgent:
@@ -212,6 +348,156 @@ class LatestGroupingProgressAgent(FakeAgent):
         ):
             cb("tool.started", tool_name, preview, {})
             time.sleep(0.35)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class ThreeToolProgressAgent(FakeAgent):
+    """Emit a third update after the first progress edit can fail."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        if cb is not None:
+            cb("tool.started", "terminal", "pwd", {})
+            time.sleep(1.7)
+            cb("tool.started", "browser_navigate", "https://example.com", {})
+            time.sleep(1.7)
+            cb("tool.started", "read_file", "/tmp/example.txt", {})
+            time.sleep(1.7)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class RapidFinalDrainProgressAgent(FakeAgent):
+    """Return while the second update is waiting behind the edit throttle."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb("tool.started", "terminal", "pwd", {})
+        time.sleep(0.35)
+        cb("tool.started", "web_search", "hermes", {"query": "hermes"})
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class PacedSameToolProgressAgent(FakeAgent):
+    """Space adjacent calls so permanent edit fallback is exercised repeatedly."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        import tools.skills_tool  # noqa: F401 - register display metadata
+
+        cb = self.tool_progress_callback
+        assert cb is not None
+        for name in ("a", "b", "c"):
+            cb("tool.started", "skill_view", name, {"name": name})
+            time.sleep(1.7)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class IdleAfterSecondToolProgressAgent(FakeAgent):
+    """Stay alive long enough to distinguish an idle flush from final drain."""
+
+    finished_at = None
+    idle_seconds = 3.2
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb("tool.started", "terminal", "pwd", {})
+        time.sleep(0.35)
+        cb("tool.started", "web_search", "hermes", {"query": "hermes"})
+        time.sleep(type(self).idle_seconds)
+        type(self).finished_at = time.monotonic()
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class LongIdleAfterSecondToolProgressAgent(IdleAfterSecondToolProgressAgent):
+    """Expose multiple retry deadlines before the agent turn completes."""
+
+    finished_at = None
+    idle_seconds = 4.8
+
+
+class ExactIdentityProgressAgent(FakeAgent):
+    """Change the rendered shape without changing the exact tool identity."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb("tool.started", "custom_tool", "alpha", {})
+        time.sleep(0.35)
+        cb("tool.started", "custom_tool", None, {})
+        time.sleep(1.7)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class LongVerboseLatestAgent(FakeAgent):
+    """Emit one verbose entry that cannot fit without adapter-aware truncation."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        code = "print('" + "x" * 400 + "')"
+        cb("tool.started", "execute_code", "long code", {"code": code})
+        time.sleep(0.35)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class ImmediateToolProgressAgent(FakeAgent):
+    """Complete before the progress sender can create its first bubble."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb("tool.started", "web_search", "hermes", {"query": "hermes"})
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class ImmediateManyToolProgressAgent(FakeAgent):
+    """Queue enough separate updates to cross graceful-stop timeout."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        calls = [
+            ("terminal", "pwd", {}),
+            ("web_search", "hermes", {"query": "hermes"}),
+            ("skill_view", "hermes-agent", {"name": "hermes-agent"}),
+            ("read_file", "README.md", {"path": "README.md"}),
+            ("execute_code", "print('done')", {"code": "print('done')"}),
+        ]
+        for tool_name, preview, args in calls:
+            cb("tool.started", tool_name, preview, args)
         return {
             "final_response": "done",
             "messages": [],
@@ -303,7 +589,7 @@ class RetryableEditProgressAgent:
 
 
 class ManyProgressLinesAgent:
-    """Emits enough tool-progress lines to exceed a single platform bubble."""
+    """Emit enough adjacent calls to exceed an unbounded latest group."""
 
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
@@ -314,12 +600,37 @@ class ManyProgressLinesAgent:
         assert cb is not None
         cb("tool.started", "terminal", "first-short", {})
         # Let the progress task create the first editable bubble, then enqueue
-        # the rest quickly.  The cancellation drain must roll them into fresh
-        # editable bubbles instead of trying to edit the first one past limit.
+        # the rest quickly.  Latest mode must retain one bounded mutable tail.
         time.sleep(0.35)
         for idx in range(1, 8):
             cb("tool.started", "terminal", f"overflow-line-{idx}-" + "x" * 45, {})
         time.sleep(0.1)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
+class GroupingProgressAgent:
+    """Emit adjacent same-tool calls followed by a different tool."""
+
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        import tools.skills_tool  # noqa: F401 - register display metadata
+        import tools.web_tools  # noqa: F401 - register display metadata
+
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb("tool.started", "skill_view", "a", {"name": "a"})
+        cb("tool.started", "skill_view", "b", {"name": "b"})
+        cb("tool.started", "skill_view", "c", {"name": "c"})
+        time.sleep(1.7)
+        cb("tool.started", "web_search", "hermes", {"query": "hermes"})
+        time.sleep(0.35)
         return {
             "final_response": "done",
             "messages": [],
@@ -620,6 +931,15 @@ def _extract_progress_preview(content: str) -> str | None:
     return None
 
 
+def extract_progress_updates(adapter: ProgressCaptureAdapter) -> list[str]:
+    """Return progress contents in send/edit order."""
+
+    return [
+        *(call["content"] for call in adapter.sent),
+        *(call["content"] for call in adapter.edits),
+    ]
+
+
 def _run_long_preview_helper(monkeypatch, tmp_path, preview_length=0):
     """Shared setup for long-preview truncation tests.
 
@@ -878,6 +1198,27 @@ class VerboseAgent:
         }
 
 
+class VerboseLatestAgent:
+    """Emit detailed calls so latest grouping must preserve verbose payloads."""
+
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        cb("tool.started", "execute_code", None, {"code": "print('first')"})
+        time.sleep(1.7)
+        cb("tool.started", "web_search", None, {"query": "hermes"})
+        time.sleep(0.35)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
 async def _run_with_agent(
     monkeypatch,
     tmp_path,
@@ -941,12 +1282,15 @@ async def _run_with_agent(
 
 
 @pytest.mark.asyncio
-async def test_run_agent_tool_progress_latest_labels_actual_ordinals(monkeypatch, tmp_path):
+@pytest.mark.parametrize("platform", [Platform.SLACK, Platform.MATRIX])
+async def test_run_agent_tool_progress_latest_labels_actual_ordinals(
+    monkeypatch, tmp_path, platform
+):
     adapter, result = await _run_with_agent(
         monkeypatch,
         tmp_path,
         LatestGroupingProgressAgent,
-        session_id="sess-progress-latest-ordinals",
+        session_id=f"sess-progress-latest-ordinals-{platform.value}",
         config_data={
             "display": {
                 "tool_progress": "all",
@@ -954,7 +1298,7 @@ async def test_run_agent_tool_progress_latest_labels_actual_ordinals(monkeypatch
                 "interim_assistant_messages": False,
             }
         },
-        platform=Platform.SLACK,
+        platform=platform,
         chat_id="C123",
         chat_type="direct",
         thread_id="1700000000.000100",
@@ -1060,6 +1404,468 @@ async def test_run_agent_rolls_progress_bubble_before_platform_limit(monkeypatch
     assert adapter.oversized_edits == []
     all_bubbles = [call["content"] for call in adapter.sent + adapter.edits]
     assert all(len(text) <= adapter.MAX_MESSAGE_LENGTH for text in all_bubbles)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_accumulate_keeps_existing_history(monkeypatch, tmp_path):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        GroupingProgressAgent,
+        session_id="sess-grouping-accumulate-regression",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "accumulate",
+            },
+        },
+    )
+
+    assert result["final_response"] == "done"
+    final_update = extract_progress_updates(adapter)[-1]
+    assert "📚 Reading skill a" in final_update
+    assert "📚 Reading skill b" in final_update
+    assert "📚 Reading skill c" in final_update
+    assert "🔍 Searching the web for hermes" in final_update
+    assert "Tool 1 ·" not in final_update
+    assert "Tools 1–3 ·" not in final_update
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_groups_then_replaces(monkeypatch, tmp_path):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        GroupingProgressAgent,
+        session_id="sess-grouping-latest",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "accumulate",
+                "platforms": {"slack": {"tool_progress_grouping": "latest"}},
+            },
+        },
+        platform=Platform.SLACK,
+        chat_type="dm",
+        thread_id="",
+    )
+
+    assert result["final_response"] == "done"
+    updates = extract_progress_updates(adapter)
+    assert len(adapter.sent) == 1
+    assert any(update == "Tools 1–3 · 📚 Reading skill a, b, c" for update in updates)
+    assert updates[-1] == "Tool 4 · 🔍 Searching the web for hermes"
+    assert "Reading skill" not in updates[-1]
+    assert "\n" not in updates[-1]
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_survives_retryable_edit(monkeypatch, tmp_path):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ThreeToolProgressAgent,
+        session_id="sess-grouping-latest-retryable",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=RetryableFirstEditProgressCaptureAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert len(adapter.sent) == 1
+    assert 2 <= len(adapter.edits) <= 3
+    assert all(edit["message_id"] == "progress-1" for edit in adapter.edits)
+    assert adapter.edits[0]["content"] == "Tool 2 · ⚙️ Browsing https://example.com"
+    final_edit = adapter.successful_edits[-1]
+    assert final_edit.startswith("Tool 3 · ")
+    assert final_edit.endswith("Reading /tmp/example.txt")
+    assert "Browsing" not in final_edit
+    assert "\n" not in final_edit
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_preserves_verbose_payload(monkeypatch, tmp_path):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        VerboseLatestAgent,
+        session_id="sess-grouping-latest-verbose",
+        config_data={
+            "display": {
+                "tool_progress": "verbose",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+    )
+
+    assert result["final_response"] == "done"
+    final_update = extract_progress_updates(adapter)[-1]
+    assert final_update.startswith("Tool 2 · ")
+    assert "web_search(['query'])" in final_update
+    assert '"query": "hermes"' in final_update
+    assert "execute_code" not in final_update
+    assert "print('first')" not in final_update
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_flushes_idle_throttled_edit(
+    monkeypatch, tmp_path
+):
+    IdleAfterSecondToolProgressAgent.finished_at = None
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        IdleAfterSecondToolProgressAgent,
+        session_id="sess-grouping-latest-idle-flush",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=TimedEditProgressCaptureAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, TimedEditProgressCaptureAdapter)
+    assert IdleAfterSecondToolProgressAgent.finished_at is not None
+    assert adapter.edit_times
+    assert min(adapter.edit_times) < IdleAfterSecondToolProgressAgent.finished_at
+    assert extract_progress_updates(adapter)[-1].startswith("Tool 2 · ")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_retries_dirty_edit_on_idle_deadline(
+    monkeypatch, tmp_path
+):
+    LongIdleAfterSecondToolProgressAgent.finished_at = None
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        LongIdleAfterSecondToolProgressAgent,
+        session_id="sess-grouping-latest-idle-retry",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=RetryableTimedEditProgressCaptureAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, RetryableTimedEditProgressCaptureAdapter)
+    assert len(adapter.sent) == 1
+    assert adapter._edit_attempts == 3
+    assert adapter.successful_edit_times
+    assert LongIdleAfterSecondToolProgressAgent.finished_at is not None
+    assert (
+        min(adapter.successful_edit_times)
+        < LongIdleAfterSecondToolProgressAgent.finished_at
+    )
+    assert extract_progress_updates(adapter)[-1].startswith("Tool 2 · ")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_groups_by_exact_tool_identity(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ExactIdentityProgressAgent,
+        session_id="sess-grouping-latest-exact-identity",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+    )
+
+    assert result["final_response"] == "done"
+    final_update = extract_progress_updates(adapter)[-1]
+    assert final_update.startswith("Tools 1–2 · ")
+    assert "custom_tool" in final_update
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_bounds_single_verbose_entry(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        LongVerboseLatestAgent,
+        session_id="sess-grouping-latest-long-verbose",
+        config_data={
+            "display": {
+                "tool_progress": "verbose",
+                "tool_progress_grouping": "latest",
+                "tool_preview_length": 0,
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=SmallLimitProgressAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, SmallLimitProgressAdapter)
+    assert adapter.oversized_sends == []
+    assert adapter.oversized_edits == []
+    delivered = [call["content"] for call in adapter.sent + adapter.edits]
+    assert delivered
+    assert all(len(content) <= adapter.MAX_MESSAGE_LENGTH for content in delivered)
+    assert delivered[-1].startswith("Tool 1 · ")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_new_mode_keeps_actual_call_ordinal(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        GroupingProgressAgent,
+        session_id="sess-grouping-latest-new",
+        config_data={
+            "display": {
+                "tool_progress": "new",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+    )
+
+    assert result["final_response"] == "done"
+    updates = extract_progress_updates(adapter)
+    assert updates[0] == "Tool 1 · 📚 Reading skill a"
+    assert updates[-1] == "Tool 4 · 🔍 Searching the web for hermes"
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_drains_before_first_send(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ImmediateToolProgressAgent,
+        session_id="sess-grouping-latest-immediate-drain",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+    )
+
+    assert result["final_response"] == "done"
+    assert len(adapter.sent) == 1
+    assert adapter.edits == []
+    assert adapter.sent[0]["content"].startswith("Tool 1 · ")
+    assert adapter.sent[0]["content"].endswith("Searching the web for hermes")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_separate_drains_each_queued_event(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ImmediateManyToolProgressAgent,
+        session_id="sess-grouping-separate-drain",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "separate",
+                "interim_assistant_messages": False,
+            }
+        },
+    )
+
+    assert result["final_response"] == "done"
+    delivered = [call["content"] for call in adapter.sent]
+    assert len(delivered) == 5
+    assert all("\n" not in content for content in delivered)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_retries_final_drain_edit(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        RapidFinalDrainProgressAgent,
+        session_id="sess-grouping-latest-final-retry",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=RetryableFirstEditProgressCaptureAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, RetryableFirstEditProgressCaptureAdapter)
+    final_edit = adapter.successful_edits[-1]
+    assert final_edit.startswith("Tool 2 · ")
+    assert final_edit.endswith("Searching the web for hermes")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_retries_dirty_buffer_on_graceful_stop(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        RapidFinalDrainProgressAgent,
+        session_id="sess-grouping-latest-dirty-stop-retry",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=RetryableEditsUntilStopAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, RetryableEditsUntilStopAdapter)
+    assert len(adapter.sent) == 1
+    assert adapter._edit_attempts == 3
+    assert adapter.successful_edits[-1].startswith("Tool 2 · ")
+    assert adapter.successful_edits[-1].endswith("Searching the web for hermes")
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_sender_cleanup_bounds_hanging_edit(
+    monkeypatch, tmp_path
+):
+    started_at = time.monotonic()
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        RapidFinalDrainProgressAgent,
+        session_id="sess-grouping-latest-hanging-edit",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=HangingEditProgressCaptureAdapter,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, HangingEditProgressCaptureAdapter)
+    assert len(adapter.sent) == 1
+    assert len(adapter.edits) == 2
+    assert elapsed < 7.0
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_retries_bounded_tail_edit_during_drain(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ManyProgressLinesAgent,
+        session_id="sess-grouping-latest-overflow-retry",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+                "tool_preview_length": 60,
+            }
+        },
+        adapter_cls=RetryableFirstEditSmallLimitAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, RetryableFirstEditSmallLimitAdapter)
+    assert adapter.oversized_sends == []
+    assert adapter.oversized_edits == []
+    delivered = [call["content"] for call in adapter.sent] + adapter.successful_edits
+    assert any(text.startswith("Tool 8 ·") or "–8 ·" in text for text in delivered)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_stops_grouping_after_permanent_edit_failure(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        PacedSameToolProgressAgent,
+        session_id="sess-grouping-latest-permanent-fallback",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        adapter_cls=PermanentFirstEditProgressCaptureAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    sent = [call["content"] for call in adapter.sent]
+    assert any(text.startswith("Tools 1–2 ·") for text in sent)
+    assert sent[-1].startswith("Tool 3 ·")
+    assert not any(text.startswith("Tools 1–3 ·") for text in sent)
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_respects_platform_limit_during_drain(
+    monkeypatch, tmp_path
+):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ManyProgressLinesAgent,
+        session_id="sess-grouping-latest-overflow",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+                "tool_preview_length": 60,
+            }
+        },
+        adapter_cls=SmallLimitProgressAdapter,
+    )
+
+    assert result["final_response"] == "done"
+    assert isinstance(adapter, SmallLimitProgressAdapter)
+    assert adapter.sent
+    assert len(adapter.sent) == 1
+    assert adapter.oversized_sends == []
+    assert adapter.oversized_edits == []
+    contents = [call["content"] for call in adapter.sent + adapter.edits]
+    assert all(len(content) <= adapter.MAX_MESSAGE_LENGTH for content in contents)
+    assert contents[-1].startswith("Tools 1–8 · ")
+    assert contents[-1].count("```") % 2 == 0
 
 
 @pytest.mark.asyncio

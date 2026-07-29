@@ -1264,6 +1264,12 @@ display:
   # Toggle at runtime with /verbose in the CLI
   tool_progress: all
 
+  # Gateway grouping on platforms that support message editing.
+  #   accumulate: Keep the turn's tool history in one edited bubble (default)
+  #   latest:     Show only the current adjacent tool group with call ordinals
+  #   separate:   Send one message per tool (pre-v0.9 style; noisier)
+  tool_progress_grouping: accumulate
+
   # Per-platform defaults can be quieter than the global setting. Telegram
   # tunes for mobile: tool_progress and busy_ack_detail default off (no
   # per-tool breadcrumb stream, no "iteration 21/60" debug detail in busy

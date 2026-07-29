@@ -567,8 +567,32 @@ class TestToolProgressGrouping:
             == "accumulate"
         )
 
+    def test_latest_supported_globally_and_per_platform(self):
+        from gateway.display_config import resolve_display_setting
+
+        global_config = {"display": {"tool_progress_grouping": "latest"}}
+        assert (
+            resolve_display_setting(global_config, "slack", "tool_progress_grouping")
+            == "latest"
+        )
+
+        platform_config = {
+            "display": {
+                "tool_progress_grouping": "accumulate",
+                "platforms": {"slack": {"tool_progress_grouping": "LATEST"}},
+            }
+        }
+        assert (
+            resolve_display_setting(platform_config, "slack", "tool_progress_grouping")
+            == "latest"
+        )
+        assert (
+            resolve_display_setting(platform_config, "telegram", "tool_progress_grouping")
+            == "accumulate"
+        )
+
     def test_invalid_value_falls_back_to_accumulate(self):
-        """_normalise rejects anything outside accumulate|separate."""
+        """_normalise rejects anything outside the documented values."""
         from gateway.display_config import resolve_display_setting
 
         config = {"display": {"tool_progress_grouping": "bogus"}}
