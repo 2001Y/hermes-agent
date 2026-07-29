@@ -422,6 +422,12 @@ class AccountUsagePresenceController:
                 )
             except Exception as exc:
                 outcome = (False, exc)
+            # Publish only after clearing the completed worker reference. The
+            # loop callback can run before the OS reports this thread stopped;
+            # retaining the stale reference would turn a completed fetch into
+            # a false "previous fetch is still running" failure.
+            if self._fetch_thread is threading.current_thread():
+                self._fetch_thread = None
             try:
                 loop.call_soon_threadsafe(self._publish_fetch_outcome, future, outcome)
             except RuntimeError:
