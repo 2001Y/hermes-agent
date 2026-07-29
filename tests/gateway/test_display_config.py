@@ -586,6 +586,15 @@ class TestToolProgressGrouping:
             == "separate"
         )
 
+    def test_latest_is_supported(self):
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"tool_progress_grouping": "LATEST"}}
+        assert (
+            resolve_display_setting(config, "telegram", "tool_progress_grouping")
+            == "latest"
+        )
+
 
 class TestReasoningStyle:
     """Per-platform reasoning render style (code | blockquote | subtext)."""

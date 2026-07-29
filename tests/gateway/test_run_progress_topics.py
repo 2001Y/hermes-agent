@@ -198,6 +198,27 @@ class FakeAgent:
         }
 
 
+class LatestGroupingProgressAgent(FakeAgent):
+    """Emit adjacent calls so latest grouping must label actual call ordinals."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        assert cb is not None
+        for tool_name, preview in (
+            ("alpha_tool", "a"),
+            ("alpha_tool", "b"),
+            ("alpha_tool", "c"),
+            ("beta_tool", "d"),
+        ):
+            cb("tool.started", tool_name, preview, {})
+            time.sleep(0.35)
+        return {
+            "final_response": "done",
+            "messages": [],
+            "api_calls": 1,
+        }
+
+
 class ThinkingAgent:
     """Agent that emits _thinking scratch text (no tool calls).
 
@@ -917,6 +938,34 @@ async def _run_with_agent(
         session_key=session_key,
     )
     return adapter, result
+
+
+@pytest.mark.asyncio
+async def test_run_agent_tool_progress_latest_labels_actual_ordinals(monkeypatch, tmp_path):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        LatestGroupingProgressAgent,
+        session_id="sess-progress-latest-ordinals",
+        config_data={
+            "display": {
+                "tool_progress": "all",
+                "tool_progress_grouping": "latest",
+                "interim_assistant_messages": False,
+            }
+        },
+        platform=Platform.SLACK,
+        chat_id="C123",
+        chat_type="direct",
+        thread_id="1700000000.000100",
+    )
+
+    assert result["final_response"] == "done"
+    updates = [call["content"] for call in adapter.sent + adapter.edits]
+    assert any(update.startswith("Tools 1–3 · ") for update in updates)
+    assert updates[-1].startswith("Tool 4 · ")
+    assert "alpha_tool" not in updates[-1]
+    assert "beta_tool" in updates[-1]
 
 
 @pytest.mark.asyncio
