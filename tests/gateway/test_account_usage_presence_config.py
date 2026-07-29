@@ -76,7 +76,7 @@ def test_unsupported_provider_and_platform_values_are_ignored():
     )
 
     assert parsed.provider is None
-    assert parsed.platforms == ("telegram", "discord")
+    assert parsed.platforms == ("telegram", "matrix", "discord")
     assert parsed.is_configured is False
 
 

@@ -1,7 +1,7 @@
 ---
 sidebar_position: 1
 title: "Account Usage Presence"
-description: "Show one provider account's remaining usage on Telegram and Discord bot identity surfaces"
+description: "Show one provider account's remaining usage on Telegram, Discord, and Matrix bot identity surfaces"
 ---
 
 # Account Usage Presence (Experimental)
@@ -15,6 +15,7 @@ out to every selected platform.
 |---|---|
 | Telegram | Default-language bot display name, for example `Hermes · Session 75%` |
 | Discord | Bot activity, for example `Watching Five hour 75% remaining` |
+| Matrix | Bot presence status, for example `Session: 75% remaining` |
 
 The feature is **off by default** because these are global bot identity writes,
 visible to every user of that bot rather than one conversation.
@@ -33,6 +34,7 @@ gateway:
     platforms:
       - telegram
       - discord
+      - matrix
     update_interval_seconds: 300
     stale_after_seconds: 900
     # Optional: select a provider window by its displayed label.
@@ -42,11 +44,12 @@ gateway:
 
 `provider` is fixed for the global identity. It does not follow whichever model
 a conversation used most recently, so separate chats cannot make the bot name
-or activity oscillate between providers. Aliases such as `auto` and `main` do
+aliases such as `auto` and `main` do
 not select an explicit account and therefore leave the feature disabled. Only
 `openai-codex`, `anthropic`, and `openrouter` are accepted; the configured
 account must already be authenticated for `/usage` to return a percentage
-window. Only `telegram` and `discord` are accepted platforms in this version.
+window. `telegram`, `discord`, and `matrix` are accepted platforms in this
+version.
 
 The minimum update interval is five minutes. Hermes also performs change-only
 writes: an unchanged rendered identity does not call the platform API again.
@@ -74,6 +77,8 @@ an explicit `(cached)` marker instead of presenting it as live.
   adapter reconnect instead of running only once at startup.
 - Discord activity is connection-scoped and is not journaled. Hermes does not
   clear an activity it does not own; normal disconnect drops the presence.
+- Matrix presence status is journaled with the same CAS ownership checks as
+  Telegram. External status changes are preserved rather than overwritten.
 - Telegram's optional `status_indicator` uses the short description, so it can
   run at the same time as account-usage presence without competing for the name.
 - `gateway.multiplex_profiles` is not supported for live updates in this

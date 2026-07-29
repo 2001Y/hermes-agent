@@ -635,3 +635,16 @@ def test_account_usage_presence_only_disables_on_explicit_skip(
         "stale_after_seconds": 1800,
         "window_label": "Seven day",
     }
+
+
+def test_account_usage_presence_setup_accepts_matrix(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config = {"gateway": {}}
+
+    monkeypatch.setattr(setup_mod, "prompt_yes_no", lambda question, default=False: True)
+    monkeypatch.setattr(setup_mod, "prompt_choice", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(setup_mod, "prompt_checklist", lambda *args, **kwargs: [2])
+
+    setup_mod._setup_account_usage_presence(config)
+
+    assert load_config()["gateway"]["account_usage_presence"]["platforms"] == ["matrix"]

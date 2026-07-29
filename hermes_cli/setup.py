@@ -2008,7 +2008,7 @@ def _setup_account_usage_presence(config: dict) -> None:
     print_info("Account Usage Presence (optional)")
     print_info(
         "Show remaining provider usage on supported bot identity surfaces "
-        "(Telegram display name, Discord activity)."
+        "(Telegram display name, Discord activity, Matrix presence status)."
     )
     print_info(
         "Requires an explicit provider (openai-codex / anthropic / openrouter) "
@@ -2062,8 +2062,9 @@ def _setup_account_usage_presence(config: dict) -> None:
     platform_items = [
         "Telegram display name",
         "Discord activity",
+        "Matrix presence status",
     ]
-    platform_map = {0: "telegram", 1: "discord"}
+    platform_map = {0: "telegram", 1: "discord", 2: "matrix"}
     current_platforms = {
         str(value).strip().lower()
         for value in presence.get("platforms", [])

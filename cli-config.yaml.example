@@ -953,7 +953,7 @@ platform_toolsets:
 #   account_usage_presence:
 #     enabled: false
 #     provider: openai-codex       # openai-codex | anthropic | openrouter
-#     platforms: [telegram, discord]
+#     platforms: [telegram, discord, matrix]
 #     update_interval_seconds: 300 # minimum 300; change-only writes
 #     stale_after_seconds: 900
 #     # window_label: Session      # optional provider window label

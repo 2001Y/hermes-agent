@@ -822,7 +822,7 @@ class AccountUsagePresenceConfig:
     """
 
     SUPPORTED_PROVIDERS = frozenset({"openai-codex", "anthropic", "openrouter"})
-    SUPPORTED_PLATFORMS = frozenset({"telegram", "discord"})
+    SUPPORTED_PLATFORMS = frozenset({"telegram", "discord", "matrix"})
 
     enabled: bool = False
     provider: Optional[str] = None

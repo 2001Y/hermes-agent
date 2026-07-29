@@ -125,6 +125,12 @@ except ImportError:
     TrustState = _TrustStateStub  # type: ignore[misc,assignment]
 
 from gateway.config import Platform, PlatformConfig
+from gateway.account_usage_presence import (
+    AccountUsagePresenceApplyResult,
+    AccountUsagePresenceCapabilities,
+    AccountUsagePresencePayload,
+    AccountUsagePresenceRestoreResult,
+)
 from gateway.platforms.base import (
     BasePlatformAdapter,
     MessageEvent,
@@ -4058,6 +4064,127 @@ class MatrixAdapter(BasePlatformAdapter):
     # ------------------------------------------------------------------
 
     _VALID_PRESENCE_STATES = frozenset(("online", "offline", "unavailable"))
+
+    @property
+    def account_usage_presence_capabilities(self) -> AccountUsagePresenceCapabilities:
+        """Expose Matrix user presence status as an account-usage surface."""
+
+        return AccountUsagePresenceCapabilities(activity=True)
+
+    def account_usage_presence_state_key(self) -> str:
+        """Keep the journal isolated per Matrix bot identity."""
+
+        user_id = self._user_id or getattr(self._client, "mxid", "")
+        return f"matrix:{user_id}" if user_id else super().account_usage_presence_state_key()
+
+    @classmethod
+    def _normalize_account_usage_presence_state(
+        cls,
+        value: Any,
+    ) -> Optional[Dict[str, str]]:
+        if not isinstance(value, dict):
+            return None
+        raw_presence = value.get("presence", "online")
+        presence = str(getattr(raw_presence, "value", raw_presence) or "").strip().lower()
+        if presence not in cls._VALID_PRESENCE_STATES:
+            return None
+        status_msg = str(value.get("status_msg") or "")[:255]
+        return {"presence": presence, "status_msg": status_msg}
+
+    async def _read_account_usage_presence(self) -> Optional[Dict[str, str]]:
+        client = self._client
+        user_id = self._user_id or getattr(client, "mxid", "")
+        if client is None or not user_id or not hasattr(client, "get_presence"):
+            return None
+        current = await client.get_presence(UserID(user_id))
+        return self._normalize_account_usage_presence_state(
+            {
+                "presence": getattr(current, "presence", "online"),
+                "status_msg": getattr(current, "status_msg", ""),
+            }
+        )
+
+    @staticmethod
+    def _account_usage_presence_status(payload: AccountUsagePresencePayload) -> str:
+        label = " ".join(str(payload.label or "Usage").split()) or "Usage"
+        if payload.remaining_percent is None:
+            status = f"{label}: usage unavailable"
+        else:
+            status = f"{label}: {payload.remaining_percent}% remaining"
+        if payload.cached:
+            status += " (cached)"
+        return status[:255]
+
+    def build_account_usage_presence_owned_state(
+        self,
+        payload: AccountUsagePresencePayload,
+        baseline: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        state = self._normalize_account_usage_presence_state(baseline)
+        if state is None:
+            return None
+        return {
+            "presence": state["presence"],
+            "status_msg": self._account_usage_presence_status(payload),
+        }
+
+    async def capture_account_usage_presence_baseline(
+        self,
+    ) -> Optional[Dict[str, Any]]:
+        return await self._read_account_usage_presence()
+
+    async def apply_account_usage_presence(
+        self,
+        payload: AccountUsagePresencePayload,
+        baseline: Optional[Dict[str, Any]],
+    ) -> bool:
+        if baseline is None:
+            return False
+        owned = self.build_account_usage_presence_owned_state(payload, baseline)
+        if owned is None:
+            return False
+        return await self.set_presence(owned["presence"], owned["status_msg"])
+
+    async def apply_account_usage_presence_if_owned(
+        self,
+        payload: AccountUsagePresencePayload,
+        baseline: Dict[str, Any],
+        expected_owned: Dict[str, Any],
+    ) -> AccountUsagePresenceApplyResult:
+        current = await self._read_account_usage_presence()
+        expected = self._normalize_account_usage_presence_state(expected_owned)
+        if current is None or expected is None:
+            return AccountUsagePresenceApplyResult.RETRY
+        if current != expected:
+            return AccountUsagePresenceApplyResult.EXTERNAL
+        owned = self.build_account_usage_presence_owned_state(payload, baseline)
+        if owned is None:
+            return AccountUsagePresenceApplyResult.RETRY
+        changed = await self.set_presence(owned["presence"], owned["status_msg"])
+        return (
+            AccountUsagePresenceApplyResult.APPLIED
+            if changed
+            else AccountUsagePresenceApplyResult.RETRY
+        )
+
+    async def restore_account_usage_presence(
+        self,
+        baseline: Dict[str, Any],
+        owned: Dict[str, Any],
+    ) -> AccountUsagePresenceRestoreResult:
+        current = await self._read_account_usage_presence()
+        expected_owned = self._normalize_account_usage_presence_state(owned)
+        target = self._normalize_account_usage_presence_state(baseline)
+        if current is None or expected_owned is None or target is None:
+            return AccountUsagePresenceRestoreResult.RETRY
+        if current != expected_owned:
+            return AccountUsagePresenceRestoreResult.EXTERNAL
+        restored = await self.set_presence(target["presence"], target["status_msg"])
+        return (
+            AccountUsagePresenceRestoreResult.RESTORED
+            if restored
+            else AccountUsagePresenceRestoreResult.RETRY
+        )
 
     async def set_presence(self, state: str = "online", status_msg: str = "") -> bool:
         """Set the bot's presence status."""
