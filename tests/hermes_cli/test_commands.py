@@ -193,6 +193,27 @@ class TestGatewayKnownCommands:
         assert "bg" in GATEWAY_KNOWN_COMMANDS
         assert "background" in GATEWAY_KNOWN_COMMANDS
 
+    def test_configured_quick_command_is_known_and_bypasses_active_session(self, monkeypatch):
+        from hermes_cli import config as config_module
+        from hermes_cli.commands import is_gateway_known_command, should_bypass_active_session
+
+        monkeypatch.setattr(
+            config_module,
+            "read_raw_config",
+            lambda: {"quick_commands": {"sol": {"type": "alias", "target": "/model sol"}}},
+        )
+
+        assert is_gateway_known_command("sol") is True
+        assert should_bypass_active_session("sol") is True
+
+    def test_unconfigured_quick_command_is_not_known(self, monkeypatch):
+        from hermes_cli import config as config_module
+        from hermes_cli.commands import is_gateway_known_command
+
+        monkeypatch.setattr(config_module, "read_raw_config", lambda: {"quick_commands": {}})
+
+        assert is_gateway_known_command("not-configured") is False
+
     def test_is_frozenset(self):
         assert isinstance(GATEWAY_KNOWN_COMMANDS, frozenset)
 

@@ -1774,9 +1774,13 @@ quick_commands:
   restart:
     type: alias
     target: /gateway restart
+  review:
+    type: alias
+    target: /model fav
+    default_args: --once
 ```
 
-Usage: type `/status`, `/disk`, `/update`, `/gpu`, or `/restart` in the CLI or any messaging platform. `exec` commands run locally on the host and return the output directly — no LLM call, no tokens consumed. `alias` commands rewrite to the configured slash command target.
+Usage: type `/status`, `/disk`, `/update`, `/gpu`, `/restart`, or `/review` in the CLI or any messaging platform. `exec` commands run locally on the host and return the output directly — no LLM call, no tokens consumed. `alias` commands rewrite to the configured slash command target. An alias's optional `default_args` are used only when no arguments are supplied; explicit arguments replace them, so `/review --session` overrides the example's one-turn `--once` default.
 
 - **30-second timeout** — long-running commands are killed with an error message
 - **Priority** — quick commands are checked before skill commands, so you can override skill names

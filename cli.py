@@ -9362,9 +9362,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 elif qcmd.get("type") == "alias":
                     target = qcmd.get("target", "").strip()
                     if target:
-                        target = target if target.startswith("/") else f"/{target}"
+                        from hermes_cli.quick_commands import build_alias_command
                         user_args = cmd_original[len(base_cmd):].strip()
-                        aliased_command = f"{target} {user_args}".strip()
+                        aliased_command = build_alias_command(
+                            target,
+                            user_args,
+                            qcmd.get("default_args", ""),
+                        )
                         return self.process_command(aliased_command)
                     else:
                         self._console_print(f"[bold red]Quick command '{base_cmd}' has no target defined[/]")

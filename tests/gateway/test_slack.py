@@ -1320,6 +1320,27 @@ class TestBangPrefixCommands:
         assert msg_event.message_type == MessageType.COMMAND
 
     @pytest.mark.asyncio
+    async def test_bang_configured_quick_command_is_rewritten(self, adapter):
+        """Configured quick commands also work with Slack's ``!`` prefix."""
+        with patch(
+            "hermes_cli.config.read_raw_config",
+            return_value={
+                "quick_commands": {
+                    "sol": {
+                        "type": "alias",
+                        "target": "/model sol",
+                        "default_args": "--once",
+                    }
+                }
+            },
+        ):
+            await adapter._handle_slack_message(self._make_event("!sol"))
+
+        msg_event = adapter.handle_message.call_args[0][0]
+        assert msg_event.text == "/sol"
+        assert msg_event.message_type == MessageType.COMMAND
+
+    @pytest.mark.asyncio
     async def test_bang_works_inside_thread(self, adapter):
         """The whole point: ``!stop`` inside a thread reply dispatches."""
         evt = self._make_event("!stop", thread_ts="1111111111.000001")

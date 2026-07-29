@@ -347,24 +347,46 @@ GATEWAY_KNOWN_COMMANDS: frozenset[str] = frozenset(
 )
 
 
-def is_gateway_known_command(name: str | None) -> bool:
-    """Return True if ``name`` resolves to a gateway-dispatchable slash command.
+def is_configured_quick_command(name: str | None) -> bool:
+    """Return True if ``name`` is a configured quick-command name."""
+    if not name:
+        return False
+    normalized = name.lower().lstrip("/")
+    try:
+        from hermes_cli.config import read_raw_config
 
-    This covers both built-in commands (``GATEWAY_KNOWN_COMMANDS`` derived
-    from ``COMMAND_REGISTRY``) and plugin-registered commands, which are
-    looked up lazily so importing this module never forces plugin
-    discovery. Gateway code uses this to decide whether to emit
-    ``command:<name>`` hooks — plugin commands get the same lifecycle
-    events as built-ins.
+        config = read_raw_config() or {}
+        quick_commands = config.get("quick_commands", {})
+        if not isinstance(quick_commands, dict):
+            return False
+        return any(
+            isinstance(command_config, dict)
+            and str(command).strip().lstrip("/").lower() == normalized
+            for command, command_config in quick_commands.items()
+        )
+    except Exception:
+        # A malformed/unreadable user config must not make built-in command
+        # dispatch unavailable.
+        return False
+
+
+def is_gateway_known_command(name: str | None) -> bool:
+    """Return True if ``name`` resolves to a gateway-dispatchable command.
+
+    This covers built-in commands, plugin-registered commands, and
+    user-defined quick commands. Quick commands are read from the raw user
+    config at dispatch time so a configured alias can use the same ``!``
+    prefix as built-in commands on platforms such as Slack.
     """
     if not name:
         return False
-    if name in GATEWAY_KNOWN_COMMANDS:
+    normalized = name.lower().lstrip("/")
+    if normalized in GATEWAY_KNOWN_COMMANDS:
         return True
     for plugin_name, _description, _args_hint in _iter_plugin_command_entries():
-        if plugin_name == name:
+        if plugin_name.lower().lstrip("/") == normalized:
             return True
-    return False
+    return is_configured_quick_command(normalized)
 
 
 # Commands with explicit Level-2 running-agent handlers in gateway/run.py.
@@ -412,7 +434,10 @@ def should_bypass_active_session(command_name: str | None) -> bool:
     ACTIVE_SESSION_BYPASS_COMMANDS remains the subset of commands with
     explicit Level-2 handlers; the rest fall through to the catch-all.
     """
-    return resolve_command(command_name) is not None if command_name else False
+    return (
+        resolve_command(command_name) is not None
+        or is_configured_quick_command(command_name)
+    ) if command_name else False
 
 
 def _resolve_config_gates() -> set[str]:

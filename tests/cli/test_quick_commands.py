@@ -82,6 +82,34 @@ class TestCLIQuickCommands:
             cli.process_command("/sc some args")
             spy.assert_any_call("/context some args")
 
+    def test_alias_command_uses_default_args_without_user_args(self):
+        """Alias quick commands append configured defaults when no args are given."""
+        cli = self._make_cli({
+            "sol": {
+                "type": "alias",
+                "target": "/model sol",
+                "default_args": "--once",
+            }
+        })
+        cli._handle_model_switch = MagicMock()
+        with patch.object(cli, "process_command", wraps=cli.process_command) as spy:
+            cli.process_command("/sol")
+            spy.assert_any_call("/model sol --once")
+
+    def test_alias_command_user_args_override_default_args(self):
+        """Explicit alias arguments replace configured defaults."""
+        cli = self._make_cli({
+            "sol": {
+                "type": "alias",
+                "target": "/model sol",
+                "default_args": "--once",
+            }
+        })
+        cli._handle_model_switch = MagicMock()
+        with patch.object(cli, "process_command", wraps=cli.process_command) as spy:
+            cli.process_command("/sol --session")
+            spy.assert_any_call("/model sol --session")
+
     def test_alias_no_target_shows_error(self):
         cli = self._make_cli({"broken": {"type": "alias", "target": ""}})
         cli.process_command("/broken")
@@ -245,3 +273,41 @@ class TestGatewayQuickCommands:
         event = self._make_event("limits")
         result = await runner._handle_message(event)
         assert result == "ok"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("args", "expected_target"),
+        [
+            ("", "/model sol --once"),
+            ("--session", "/model sol --session"),
+        ],
+    )
+    async def test_gateway_alias_applies_default_args_and_allows_override(
+        self, args, expected_target
+    ):
+        from unittest.mock import AsyncMock
+        from gateway.config import GatewayConfig
+        from gateway.run import GatewayRunner
+
+        runner = GatewayRunner.__new__(GatewayRunner)
+        runner.config = GatewayConfig(
+            quick_commands={
+                "sol": {
+                    "type": "alias",
+                    "target": "/model sol",
+                    "default_args": "--once",
+                }
+            }
+        )
+        runner._running_agents = {}
+        runner._pending_messages = {}
+        runner._is_user_authorized = MagicMock(return_value=True)
+        runner.hooks = MagicMock()
+        runner.hooks.emit_collect = AsyncMock(return_value=[])
+        runner._handle_model_command = AsyncMock(return_value="handled")
+
+        event = self._make_event("sol", args)
+        result = await runner._handle_message(event)
+
+        assert result == "handled"
+        assert event.text == expected_target

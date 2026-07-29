@@ -151,9 +151,13 @@ quick_commands:
   inbox:
     type: alias
     target: /gmail unread
+  review:
+    type: alias
+    target: /model fav
+    default_args: --once
 ```
 
-Then type `/status`, `/deploy`, or `/inbox` in the CLI or a messaging platform. Quick commands are resolved at dispatch time and may not appear in every built-in autocomplete/help table.
+Then type `/status`, `/deploy`, `/inbox`, or `/review` in the CLI or a messaging platform. Quick commands are resolved at dispatch time and may not appear in every built-in autocomplete/help table. For alias commands, `default_args` are appended only when the invocation has no arguments; explicit arguments replace them. In the example, `/review` switches to `fav` for one turn, while `/review --session` keeps the session on that model.
 
 String-only prompt shortcuts are not supported as quick commands. Put longer reusable prompts in a skill, or use `type: alias` to point at an existing slash command.
 

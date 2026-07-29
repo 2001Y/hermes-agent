@@ -10873,10 +10873,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if qcmd.get("type") == "alias":
                     target = (qcmd.get("target") or "").strip()
                     if target:
-                        target = target if target.startswith("/") else f"/{target}"
-                        target_command = target.lstrip("/")
+                        from hermes_cli.quick_commands import build_alias_command
                         user_args = event.get_command_args().strip()
-                        event.text = f"{target} {user_args}".strip()
+                        event.text = build_alias_command(
+                            target,
+                            user_args,
+                            qcmd.get("default_args", ""),
+                        )
+                        target_command = event.text.lstrip("/")
                         command = target_command.split()[0] if target_command else target_command
                         _cmd_def = _resolve_cmd(command) if command else None
                         canonical = _cmd_def.name if _cmd_def else command
@@ -11297,10 +11301,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 elif qcmd.get("type") == "alias":
                     target = (qcmd.get("target") or "").strip()
                     if target:
-                        target = target if target.startswith("/") else f"/{target}"
-                        target_command = target.lstrip("/")
+                        from hermes_cli.quick_commands import build_alias_command
                         user_args = event.get_command_args().strip()
-                        event.text = f"{target} {user_args}".strip()
+                        event.text = build_alias_command(
+                            target,
+                            user_args,
+                            qcmd.get("default_args", ""),
+                        )
+                        target_command = event.text.lstrip("/")
                         command = target_command.split()[0] if target_command else target_command
                         # Fall through to normal command dispatch below
                     else:
