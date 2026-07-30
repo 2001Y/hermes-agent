@@ -279,6 +279,7 @@ _LEGACY_HOME_TARGET_ENV_VARS = {
 
 from cron.jobs import get_due_jobs, mark_job_run, save_job_output, advance_next_run, claim_dispatch, heartbeat_run_claim
 from cron.executions import create_execution, finish_execution, mark_execution_running
+from cron.failure_notifications import CronFailureNotifier
 
 # Sentinel: when a cron agent has nothing new to report, it can start its
 # response with this marker to suppress delivery.  Output is still saved
@@ -590,6 +591,80 @@ def _get_hermes_home() -> Path:
     anchor it at the shared default root — either re-breaks profile isolation.
     """
     return _hermes_home or get_hermes_home()
+
+
+def _cron_failure_notifier() -> CronFailureNotifier:
+    """Return the active profile's durable cron failure notifier."""
+
+    state_path = _get_hermes_home() / "state" / "cron_failure_notifications.json"
+    return CronFailureNotifier(state_path)
+
+
+def _cron_failure_identity(job: dict) -> str:
+    """Build a profile-scoped producer identity for a cron job."""
+
+    return f"hermes-cron:{job.get('id') or job.get('name') or 'unknown'}"
+
+
+def _cron_recovery_message(job: dict, consecutive_count: int) -> str:
+    """Return the compact recovery notice sent once after a failure streak."""
+
+    job_name = job.get("name") or job.get("id") or "cron job"
+    return (
+        f"✅ Cron '{job_name}' recovered after {consecutive_count} "
+        "consecutive failure(s). Full details remain in the cron output."
+    )
+
+
+def _failure_target_platforms(targets: list[dict]) -> list[str]:
+    """Return unique normalized platforms from concrete delivery targets."""
+
+    platforms: list[str] = []
+    seen: set[str] = set()
+    for target in targets:
+        platform = str(target.get("platform") or "").strip().lower()
+        if platform and platform not in seen:
+            seen.add(platform)
+            platforms.append(platform)
+    return platforms
+
+
+def _record_failure_delivery_outcome(
+    notifier: CronFailureNotifier,
+    identity: str,
+    allowed_platforms: list[str],
+    delivery_error: str | None,
+) -> None:
+    """Persist the incident delivery result and open provider circuits safely."""
+
+    notifier.record_delivery(
+        identity,
+        delivered=delivery_error is None,
+        error=delivery_error,
+    )
+    if not delivery_error:
+        return
+    lower_error = delivery_error.lower()
+    for platform in allowed_platforms:
+        # A provider-specific error normally contains the target platform.  Do
+        # not open Matrix/Telegram circuits merely because Slack failed in a
+        # fan-out delivery; only infer Slack from an explicit provider token.
+        if platform in lower_error:
+            notifier.record_transport_failure(platform, delivery_error)
+
+
+def _filter_failure_delivery_targets(
+    targets: list[dict],
+    allowed_platforms: list[str] | None,
+) -> list[dict]:
+    if allowed_platforms is None:
+        return targets
+    allowed = {str(platform).lower() for platform in allowed_platforms}
+    return [
+        target
+        for target in targets
+        if str(target.get("platform") or "").lower() in allowed
+    ]
 
 
 def _get_lock_paths() -> tuple[Path, Path]:
@@ -1442,7 +1517,15 @@ def _is_channel_dm_topic(
     return is_channel
 
 
-def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Optional[str]:
+def _deliver_result(
+    job: dict,
+    content: str,
+    adapters=None,
+    loop=None,
+    *,
+    failure_notification: bool = False,
+    failure_allowed_platforms: list[str] | None = None,
+) -> Optional[str]:
     """
     Deliver job output to the configured target(s) (origin chat, specific platform, etc.).
 
@@ -1454,6 +1537,8 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     Returns None on success, or an error string on failure.
     """
     targets = _resolve_delivery_targets(job)
+    if failure_notification:
+        targets = _filter_failure_delivery_targets(targets, failure_allowed_platforms)
     if not targets:
         deliver_value = _normalize_deliver_value(job.get("deliver", "local"))
         if deliver_value == "local":
@@ -3797,6 +3882,36 @@ def run_one_job(job: dict, *, adapters=None, loop=None, verbose: bool = False) -
         # deferred agent is still torn down. Otherwise the outer `except` would
         # swallow the error and leak the agent's subprocesses/clients (#10200).
         delivery_error = None
+        failure_notifier = None
+        failure_identity = _cron_failure_identity(job)
+        failure_decision = None
+        recovery_decision = None
+        failure_allowed_platforms: list[str] | None = None
+        failure_notification = False
+        notification_targets: list[dict] = []
+        try:
+            notification_targets = _resolve_delivery_targets(job)
+        except Exception as target_error:
+            # The existing delivery path remains authoritative for the actual
+            # send.  The notification gate fails closed when target discovery
+            # itself is broken, so a bad target cannot become a message storm.
+            logger.warning(
+                "Job '%s': could not resolve failure-notification targets: %s",
+                job["id"],
+                target_error,
+            )
+        try:
+            failure_notifier = _cron_failure_notifier()
+        except Exception as state_error:
+            # Do not send an unbounded failure alert when durable state cannot
+            # be opened.  The full run output and this log remain local evidence.
+            logger.error(
+                "Job '%s': failure-notification state unavailable; "
+                "failure chat delivery is disabled: %s",
+                job["id"],
+                state_error,
+            )
+
         try:
             output_file = save_job_output(job["id"], output)
             if verbose:
@@ -3816,14 +3931,91 @@ def run_one_job(job: dict, *, adapters=None, loop=None, verbose: bool = False) -
                     "(tool subprocess was killed mid-flight)."
                 )
 
+            deliver_content = (
+                final_response
+                if success
+                else _summarize_cron_failure_for_delivery(job, error)
+            )
+
+            # Claim the incident transition before delivery.  This is the
+            # cross-process dedup point: only the first/new fingerprint gets a
+            # chat attempt; repeated identical failures stay in local state.
+            if success and final_response.strip():
+                if failure_notifier is not None:
+                    recovery_decision = failure_notifier.record_success(
+                        failure_identity,
+                        notification_possible=bool(notification_targets),
+                    )
+                if recovery_decision and recovery_decision.notify:
+                    failure_allowed_platforms = failure_notifier.claim_failure_targets(
+                        _failure_target_platforms(notification_targets)
+                    )
+                    if failure_allowed_platforms:
+                        recovery_text = _cron_recovery_message(
+                            job, recovery_decision.consecutive_count
+                        )
+                        if _is_cron_silence_response(final_response):
+                            deliver_content = recovery_text
+                        else:
+                            deliver_content = f"{recovery_text}\n\n{final_response}"
+                        failure_notification = True
+                    else:
+                        # The normal healthy report is still allowed through;
+                        # only the optional recovery annotation is suppressed
+                        # while its destination circuit is open.
+                        deliver_content = final_response
+            elif not success:
+                failure_decision = (
+                    failure_notifier.record_failure(
+                        failure_identity,
+                        error,
+                        notification_possible=bool(notification_targets),
+                    )
+                    if failure_notifier is not None
+                    else None
+                )
+
             # Deliver the final response to the origin/target chat.
             # If the agent responded with [SILENT], skip delivery (but
-            # output is already saved above).  Failed jobs always deliver.
-            deliver_content = final_response if success else _summarize_cron_failure_for_delivery(job, error)
-            # Treat whitespace-only final responses the same as empty
-            # responses: do not deliver a blank message, and let the
-            # empty-response guard below mark the run as a soft failure.
+            # output is already saved above).  A first/new failure delivers
+            # once; duplicate failures are recorded locally only.
             should_deliver = bool(deliver_content.strip())
+
+            if not success and failure_notifier is None and notification_targets:
+                should_deliver = False
+                logger.warning(
+                    "Job '%s': suppressing failure delivery because the "
+                    "notification state is unavailable",
+                    job["id"],
+                )
+            elif (
+                not success
+                and failure_decision is not None
+                and notification_targets
+                and not failure_decision.notify
+            ):
+                should_deliver = False
+                logger.info(
+                    "Job '%s': suppressing duplicate failure notification "
+                    "(fingerprint=%s, count=%s)",
+                    job["id"],
+                    failure_decision.fingerprint[:12],
+                    failure_decision.consecutive_count,
+                )
+            elif not success and failure_decision and failure_decision.notify:
+                failure_allowed_platforms = failure_notifier.claim_failure_targets(
+                    _failure_target_platforms(notification_targets)
+                )
+                if failure_allowed_platforms:
+                    failure_notification = True
+                else:
+                    should_deliver = False
+                    logger.warning(
+                        "Job '%s': suppressing failure notification because all "
+                        "destinations are circuit-open",
+                        job["id"],
+                    )
+
             # Cron silence suppression — see _is_cron_silence_response.  Replaces the
             # old `SILENT_MARKER in ...upper()` substring check, which both leaked
             # bracketless near-markers ("SILENT" / "NO_REPLY") and wrongly swallowed
@@ -3836,10 +4028,29 @@ def run_one_job(job: dict, *, adapters=None, loop=None, verbose: bool = False) -
 
             if should_deliver:
                 try:
-                    delivery_error = _deliver_result(job, deliver_content, adapters=adapters, loop=loop)
+                    if failure_notification:
+                        delivery_error = _deliver_result(
+                            job,
+                            deliver_content,
+                            adapters=adapters,
+                            loop=loop,
+                            failure_notification=True,
+                            failure_allowed_platforms=failure_allowed_platforms,
+                        )
+                    else:
+                        delivery_error = _deliver_result(
+                            job, deliver_content, adapters=adapters, loop=loop
+                        )
                 except Exception as de:
                     delivery_error = str(de)
                     logger.error("Delivery failed for job %s: %s", job["id"], de)
+                if failure_notification and failure_notifier is not None:
+                    _record_failure_delivery_outcome(
+                        failure_notifier,
+                        failure_identity,
+                        failure_allowed_platforms or [],
+                        delivery_error,
+                    )
         finally:
             # Tear down the deferred agent(s) now that save + delivery have run
             # (or raised). Must happen on every path so cron agents never leak
@@ -3853,6 +4064,12 @@ def run_one_job(job: dict, *, adapters=None, loop=None, verbose: bool = False) -
         if success and not final_response.strip():
             success = False
             error = "Agent completed but produced empty response (model error, timeout, or misconfiguration)"
+            if failure_notifier is not None:
+                failure_notifier.record_failure(
+                    failure_identity,
+                    error,
+                    notification_possible=False,
+                )
 
         if not _consume_interrupted_flag(job["id"]):
             mark_job_run(job["id"], success, error, delivery_error=delivery_error)
