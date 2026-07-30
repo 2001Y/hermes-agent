@@ -4325,7 +4325,8 @@ OPTIONAL_ENV_VARS = {
     "SLACK_BOT_TOKEN": {
         "description": "Slack bot token (xoxb-). Get from OAuth & Permissions after installing your app. "
                        "Required scopes: chat:write, app_mentions:read, channels:history, groups:history, "
-                       "im:history, im:read, im:write, mpim:history, mpim:read, users:read, files:read, files:write",
+                       "im:history, im:read, im:write, mpim:history, mpim:read, reactions:write, users:read, "
+                       "files:read, files:write",
         "prompt": "Slack Bot Token (xoxb-...)",
         "help": "In your Slack app, add the required bot scopes, install the app to the workspace, then copy OAuth & Permissions > Bot User OAuth Token.",
         "url": "https://api.slack.com/apps",

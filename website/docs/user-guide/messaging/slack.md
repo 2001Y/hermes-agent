@@ -79,6 +79,7 @@ Navigate to **Features → OAuth & Permissions** in the sidebar. Scroll to **Sco
 | `im:write` | Open and manage DMs |
 | `mpim:history` | Read group direct message (multi-person DM) history |
 | `mpim:read` | View basic group DM info |
+| `reactions:write` | Add and remove processing/result reactions on messages |
 | `users:read` | Look up user information |
 | `files:read` | Read and download attached files, including voice notes/audio |
 | `files:write` | Upload files (images, audio, documents) |
