@@ -34,14 +34,14 @@ def _resolve_background_review_max_iterations(task: Dict[str, Any]) -> int:
     """Return the configured agent-loop budget for one background review.
 
     The background review follows the main-agent configuration contract: the
-    historical default is used when the key is absent, and numeric values are
-    passed through without an extra lower or upper bound.
+    historical default is used when the key is absent, numeric values are
+    accepted, and the agent loop always receives at least one iteration.
     """
     try:
         value = int(task.get("max_iterations", _BACKGROUND_REVIEW_DEFAULT_MAX_ITERATIONS))
     except (TypeError, ValueError):
         value = _BACKGROUND_REVIEW_DEFAULT_MAX_ITERATIONS
-    return value
+    return max(1, value)
 
 
 # ---------------------------------------------------------------------------
@@ -86,8 +86,8 @@ def _resolve_review_runtime(agent: Any) -> Dict[str, Any]:
         "routed": False,
     }
     try:
-        from hermes_cli.config import load_config
-        cfg = load_config()
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly()
     except Exception:
         return parent
     aux = cfg.get("auxiliary", {}) if isinstance(cfg.get("auxiliary"), dict) else {}

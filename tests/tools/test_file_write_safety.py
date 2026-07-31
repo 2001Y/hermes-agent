@@ -292,6 +292,14 @@ class TestCheckSensitivePathMacOSBypass:
         from tools.file_tools import _check_sensitive_path
         assert _check_sensitive_path("/boot/grub/grub.cfg") is not None
 
+    def test_system_tempdir_is_allowed(self, monkeypatch):
+        from tools.file_tools import _check_sensitive_path
+        monkeypatch.setattr(
+            "tools.file_tools.tempfile.gettempdir",
+            lambda: "/private/var/folders/test-temp",
+        )
+        assert _check_sensitive_path("/private/var/folders/test-temp/file.txt") is None
+
     def test_safe_path_allowed(self):
         from tools.file_tools import _check_sensitive_path
         assert _check_sensitive_path("/tmp/safe_file.txt") is None

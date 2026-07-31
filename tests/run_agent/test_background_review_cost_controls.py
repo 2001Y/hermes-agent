@@ -44,7 +44,7 @@ class _FakeAgent:
 def test_routing_auto_inherits_parent_and_downgrades_codex_app_server():
     agent = _FakeAgent()
     cfg = {"auxiliary": {"background_review": {"provider": "auto", "model": ""}}}
-    with patch("hermes_cli.config.load_config", return_value=cfg):
+    with patch("hermes_cli.config.load_config_readonly", return_value=cfg):
         rt = br._resolve_review_runtime(agent)
     assert rt["routed"] is False
     assert rt["provider"] == "openai-codex"
@@ -57,7 +57,7 @@ def _iteration_budget(review_overrides):
     cfg = {"auxiliary": {"background_review": {
         "provider": "auto", "model": "", **review_overrides,
     }}}
-    with patch("hermes_cli.config.load_config", return_value=cfg):
+    with patch("hermes_cli.config.load_config_readonly", return_value=cfg):
         return br._resolve_review_runtime(agent)["max_iterations"]
 
 
@@ -68,8 +68,8 @@ def test_background_review_iteration_budget_defaults_to_16_when_unset():
 def test_background_review_iteration_budget_passes_numeric_values_through():
     assert _iteration_budget({"max_iterations": 1}) == 1
     assert _iteration_budget({"max_iterations": 16}) == 16
-    assert _iteration_budget({"max_iterations": 0}) == 0
-    assert _iteration_budget({"max_iterations": -8}) == -8
+    assert _iteration_budget({"max_iterations": 0}) == 1
+    assert _iteration_budget({"max_iterations": -8}) == 1
     assert _iteration_budget({"max_iterations": 17}) == 17
     assert _iteration_budget({"max_iterations": 500}) == 500
 
@@ -92,7 +92,7 @@ def test_routing_to_different_model_marks_routed_and_resolves_credentials():
         "request_overrides": {"extra_body": {"store": False}},
         "max_output_tokens": 2048,
     }
-    with patch("hermes_cli.config.load_config", return_value=cfg), \
+    with patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
          patch("hermes_cli.runtime_provider.resolve_runtime_provider", return_value=fake_rp):
         rt = br._resolve_review_runtime(agent)
     assert rt["routed"] is True
@@ -109,7 +109,7 @@ def test_unrouted_runtime_keeps_parent_pool_and_overrides():
     agent._credential_pool = "parent-pool"
     agent.request_overrides = {"service_tier": "priority"}
     agent.max_tokens = 4096
-    with patch("hermes_cli.config.load_config", return_value={}):
+    with patch("hermes_cli.config.load_config_readonly", return_value={}):
         rt = br._resolve_review_runtime(agent)
     assert rt["credential_pool"] == "parent-pool"
     assert rt["request_overrides"] == {"service_tier": "priority"}
@@ -121,7 +121,7 @@ def test_routing_same_model_as_parent_is_not_routed():
     cfg = {"auxiliary": {"background_review": {
         "provider": "openrouter", "model": "anthropic/claude-opus-4.8",
     }}}
-    with patch("hermes_cli.config.load_config", return_value=cfg):
+    with patch("hermes_cli.config.load_config_readonly", return_value=cfg):
         rt = br._resolve_review_runtime(agent)
     assert rt["routed"] is False  # same model/provider → keep full-replay path
 
@@ -131,7 +131,7 @@ def test_routing_resolution_failure_falls_back_to_parent():
     cfg = {"auxiliary": {"background_review": {
         "provider": "openrouter", "model": "google/gemini-3-flash-preview",
     }}}
-    with patch("hermes_cli.config.load_config", return_value=cfg), \
+    with patch("hermes_cli.config.load_config_readonly", return_value=cfg), \
          patch("hermes_cli.runtime_provider.resolve_runtime_provider",
                side_effect=RuntimeError("boom")):
         rt = br._resolve_review_runtime(agent)

@@ -7,6 +7,7 @@ import logging
 import os
 import posixpath
 import sys
+import tempfile
 import threading
 from pathlib import Path, PurePosixPath
 
@@ -568,12 +569,7 @@ def _filter_read_blocked_search_results(result, task_id: str = "default") -> int
 # terminal tool's approval system.  These match prefixes after os.path.realpath.
 _SENSITIVE_PATH_PREFIXES = (
     "/etc/", "/boot/", "/usr/lib/systemd/",
-    "/private/etc/",
-    # /private/var/folders is macOS's user-writable temporary directory;
-    # protecting all of /private/var would block pytest and tempfile paths.
-    "/var/log/", "/var/lib/", "/var/db/", "/var/run/", "/var/root/",
-    "/private/var/log/", "/private/var/lib/", "/private/var/db/",
-    "/private/var/run/", "/private/var/root/",
+    "/private/etc/", "/private/var/",
 )
 _SENSITIVE_EXACT_PATHS = {"/var/run/docker.sock", "/run/docker.sock"}
 
@@ -596,6 +592,16 @@ def _get_hermes_config_resolved() -> str | None:
         except Exception:
             _hermes_config_resolved = None
     return _hermes_config_resolved
+
+
+def _is_system_temp_path(filepath: str) -> bool:
+    """Return whether *filepath* is inside the platform's temp directory."""
+    try:
+        temp_root = os.path.realpath(tempfile.gettempdir())
+        candidate = os.path.realpath(filepath)
+    except (OSError, TypeError):
+        return False
+    return candidate == temp_root or candidate.startswith(temp_root + os.sep)
 
 
 def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None:
@@ -621,6 +627,10 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
         )
     for prefix in _SENSITIVE_PATH_PREFIXES:
         if resolved.startswith(prefix) or normalized.startswith(prefix):
+            if prefix == "/private/var/" and (
+                _is_system_temp_path(resolved) or _is_system_temp_path(normalized)
+            ):
+                continue
             return _err
     if resolved in _SENSITIVE_EXACT_PATHS or normalized in _SENSITIVE_EXACT_PATHS:
         return _err

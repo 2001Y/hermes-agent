@@ -959,7 +959,7 @@ def main() -> int:
                 _print_inline_failure(fpath, output, repo_root, pytest_passthrough)
 
     basetemp_root = Path(
-        tempfile.mkdtemp(prefix="h-", dir="/tmp")
+        tempfile.mkdtemp(prefix="h-", dir=tempfile.gettempdir())
     )
     try:
         with ThreadPoolExecutor(max_workers=args.jobs) as pool:
