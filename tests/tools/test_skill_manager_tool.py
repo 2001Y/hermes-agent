@@ -403,6 +403,32 @@ class TestRenameSkill:
         assert 'name: "new-skill"' in content
         assert "name: old-skill" not in content
 
+    def test_background_rename_requires_reading_skill_md(self, tmp_path):
+        import tools.skill_manager_tool as manager
+
+        with _skill_dir(tmp_path):
+            _create_skill("old-skill", _skill_content("old-skill"))
+            manager._reset_background_review_read_marks()
+            with patch("tools.skill_provenance.is_background_review", return_value=True):
+                result = _rename_skill("old-skill", "new-skill")
+
+        assert result["success"] is False
+        assert result["_read_before_write_required"] is True
+        assert "skill_view" in result["error"]
+        assert (tmp_path / "old-skill" / "SKILL.md").exists()
+        assert not (tmp_path / "new-skill").exists()
+
+    def test_rename_rewrites_plural_and_legacy_cron_references(self, tmp_path, monkeypatch):
+        jobs_mod, job_id, _cron_before = _cron_store_with_legacy_refs(monkeypatch, tmp_path)
+        with _skill_dir(tmp_path):
+            _create_skill("old-skill", _skill_content("old-skill"))
+            result = _rename_skill("old-skill", "new-skill")
+
+        assert result["success"] is True, result
+        stored_job = jobs_mod.get_job(job_id)
+        assert stored_job["skills"] == ["new-skill", "keep-skill"]
+        assert stored_job["skill"] == "new-skill"
+
     def test_rename_rolls_back_when_cron_reference_rewrite_fails(
         self,
         tmp_path,
