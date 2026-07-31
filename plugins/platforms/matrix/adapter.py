@@ -22,6 +22,8 @@ Environment variables:
                             `platforms.matrix.extra.processing_reaction_scope`
                             accepts `message` (default) or `thread` to place
                             the state on the Matrix thread root event.
+                            `processing_reaction_state_limit` bounds completed
+                            thread state retained in memory (default: 500).
     MATRIX_REQUIRE_MENTION      Require @mention in rooms (default: true)
     MATRIX_FREE_RESPONSE_ROOMS  Comma-separated room IDs exempt from mention requirement
                                 (alias of matrix.free_response_rooms)
@@ -450,6 +452,7 @@ class _MatrixProcessingReactionState:
     eyes_event_id: str | None = None
     terminal_event_id: str | None = None
     terminal_emoji: str | None = None
+    active_message_ids: Set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -994,6 +997,7 @@ class MatrixAdapter(BasePlatformAdapter):
     max_message_length = DEFAULT_MAX_MESSAGE_LENGTH
     _split_threshold = DEFAULT_MAX_MESSAGE_LENGTH - 100
     _processing_reaction_scope = "message"
+    _processing_reaction_state_limit = 500
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.MATRIX)
@@ -1130,6 +1134,11 @@ class MatrixAdapter(BasePlatformAdapter):
             )
             reaction_scope = "message"
         self._processing_reaction_scope = reaction_scope
+        raw_state_limit = config.extra.get("processing_reaction_state_limit", 500)
+        try:
+            self._processing_reaction_state_limit = max(1, int(raw_state_limit))
+        except (TypeError, ValueError):
+            self._processing_reaction_state_limit = 500
         self._pending_reactions: dict[tuple[str, str], str] = {}
         self._reaction_states: dict[
             tuple[str, str], _MatrixProcessingReactionState
@@ -3581,6 +3590,36 @@ class MatrixAdapter(BasePlatformAdapter):
             self._reaction_states = states
         return states.setdefault(reaction_key, _MatrixProcessingReactionState())
 
+    def _prune_completed_processing_reaction_states(
+        self,
+        protected_key: tuple[str, str] | None = None,
+    ) -> list[tuple[tuple[str, str], _MatrixProcessingReactionState]]:
+        """Drop old completed thread state while preserving active turns."""
+        states = getattr(self, "_reaction_states", None)
+        if not states:
+            return []
+        try:
+            limit = max(1, int(getattr(self, "_processing_reaction_state_limit", 500)))
+        except (TypeError, ValueError):
+            limit = 500
+        if len(states) <= limit:
+            return []
+
+        pending = getattr(self, "_pending_reactions", {})
+        removed: list[tuple[tuple[str, str], _MatrixProcessingReactionState]] = []
+        for key, state in list(states.items()):
+            if len(states) <= limit:
+                break
+            if key == protected_key:
+                continue
+            if getattr(state, "active_message_ids", set()):
+                continue
+            if state.eyes_event_id is not None or key in pending:
+                continue
+            states.pop(key, None)
+            removed.append((key, state))
+        return removed
+
     async def _redact_tracked_reaction(
         self,
         room_id: str,
@@ -3614,6 +3653,14 @@ class MatrixAdapter(BasePlatformAdapter):
         room_id, target_event_id = target
         reaction_key = (room_id, target_event_id)
         state = self._get_processing_reaction_state(reaction_key)
+        for expired_key, expired_state in self._prune_completed_processing_reaction_states(
+            protected_key=reaction_key
+        ):
+            await self._redact_tracked_reaction(
+                expired_key[0],
+                expired_state.terminal_event_id,
+                "processing state expired",
+            )
         state.generation += 1
         generation = state.generation
 
@@ -3623,6 +3670,8 @@ class MatrixAdapter(BasePlatformAdapter):
             event_generations = {}
             self._processing_event_generations = event_generations
         event_generations[(room_id, event_message_id)] = generation
+        if isinstance(event_message_id, str):
+            state.active_message_ids.add(event_message_id)
 
         previous_eyes_event_id = state.eyes_event_id
         previous_terminal_event_id = state.terminal_event_id
@@ -3684,6 +3733,7 @@ class MatrixAdapter(BasePlatformAdapter):
         event_message_id = event.message_id
         event_generations = getattr(self, "_processing_event_generations", {})
         event_generation = event_generations.pop((room_id, event_message_id), None)
+        state.active_message_ids.discard(event_message_id)
         if event_generation is not None and event_generation != state.generation:
             # A newer message in this thread owns the visible state.
             return

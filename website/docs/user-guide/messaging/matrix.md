@@ -128,9 +128,10 @@ platforms:
   matrix:
     extra:
       processing_reaction_scope: thread
+      processing_reaction_state_limit: 500
 ```
 
-With this setting, a follow-up message reopens the thread-root status (`✅`/`❌` → `👀`) and the latest completion updates that same root. Messages without a Matrix `thread_id` retain message-scoped behavior. Hermes only redacts reaction events it created during the current gateway process; existing reactions are not scanned or changed after a gateway restart.
+With this setting, a follow-up message reopens the thread-root status (`✅`/`❌` → `👀`) and the latest completion updates that same root. `processing_reaction_state_limit` bounds completed thread state retained in memory while preserving active turns. Messages without a Matrix `thread_id` retain message-scoped behavior. Hermes only redacts reaction events it created during the current gateway process; existing reactions are not scanned or changed after a gateway restart.
 :::
 
 :::tip Room-wide mentions
