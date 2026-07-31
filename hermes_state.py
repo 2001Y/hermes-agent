@@ -19,6 +19,7 @@ import json
 import logging
 import random
 import re
+import shutil
 import sqlite3
 import sys
 import threading
@@ -7735,6 +7736,33 @@ class SessionDB:
                     )
         return rebuilt
 
+    def vacuum_preflight(self) -> Dict[str, Any]:
+        """Return a read-only space check for a full database rewrite.
+
+        SQLite VACUUM needs a second copy of the database while it rewrites
+        pages. A live multi-gigabyte state.db must therefore never be started
+        merely because a caller has enough space for the current file.
+        """
+        db_bytes = self.db_path.stat().st_size if self.db_path.exists() else 0
+        wal_path = Path(f"{self.db_path}-wal")
+        shm_path = Path(f"{self.db_path}-shm")
+        wal_bytes = wal_path.stat().st_size if wal_path.exists() else 0
+        shm_bytes = shm_path.stat().st_size if shm_path.exists() else 0
+        free_bytes = shutil.disk_usage(self.db_path.parent).free
+        # Keep a safety margin for SQLite temp pages and normal runtime writes.
+        required_bytes = max(
+            db_bytes * 2 + wal_bytes + shm_bytes,
+            db_bytes + wal_bytes + shm_bytes + 512 * 1024 * 1024,
+        )
+        return {
+            "db_bytes": db_bytes,
+            "wal_bytes": wal_bytes,
+            "shm_bytes": shm_bytes,
+            "free_bytes": free_bytes,
+            "required_bytes": required_bytes,
+            "safe": free_bytes >= required_bytes,
+        }
+
     def vacuum(self) -> int:
         """Run VACUUM to reclaim disk space after large deletes.
 
@@ -7756,6 +7784,13 @@ class SessionDB:
         Returns the number of FTS indexes that were optimized (0 if the
         merge step failed or no FTS tables exist).
         """
+        preflight = self.vacuum_preflight()
+        if not preflight["safe"]:
+            raise RuntimeError(
+                "VACUUM refused: free disk space is below the safe rewrite "
+                f"requirement ({preflight['free_bytes']} < {preflight['required_bytes']} bytes)"
+            )
+
         # Merge FTS5 segments before VACUUM so the freed pages are returned
         # to the OS in the same pass. optimize_fts() manages its own lock.
         optimized = 0

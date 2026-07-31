@@ -43,7 +43,12 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # pytest, pytest-asyncio, pytest-timeout, ruff, ty).
 VENV=""
 for candidate in "$REPO_ROOT/.venv" "$REPO_ROOT/venv" "$HOME/.hermes/hermes-agent/venv"; do
-  if [ -f "$candidate/bin/activate" ]; then
+  # A directory with an activate script is not enough: release venvs can be
+  # intentionally stripped of pytest. Skip those and continue to the next
+  # candidate so the canonical runner cannot select a non-test environment.
+  if [ -f "$candidate/bin/activate" ] \
+      && [ -x "$candidate/bin/python" ] \
+      && "$candidate/bin/python" -c 'import pytest' >/dev/null 2>&1; then
     VENV="$candidate"
     break
   fi

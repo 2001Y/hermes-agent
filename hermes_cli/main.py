@@ -14625,9 +14625,14 @@ def main():
         "bare number of days, or ISO timestamp)",
     )
 
-    sessions_subparsers.add_parser(
+    sessions_optimize = sessions_subparsers.add_parser(
         "optimize",
         help="Reclaim disk space: merge FTS5 segments + VACUUM (no data change)",
+    )
+    sessions_optimize.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Only report the database size and safe free-space requirement",
     )
 
     sessions_repair = sessions_subparsers.add_parser(
@@ -15386,6 +15391,19 @@ def main():
 
         elif action == "optimize":
             db_path = db.db_path
+            preflight = db.vacuum_preflight()
+            if getattr(args, "dry_run", False):
+                def _gib(value):
+                    return value / (1024 ** 3)
+
+                print("VACUUM preflight (read-only):")
+                print(f"  database: {_gib(preflight['db_bytes']):.2f} GiB")
+                print(f"  WAL + SHM: {_gib(preflight['wal_bytes'] + preflight['shm_bytes']):.2f} GiB")
+                print(f"  free: {_gib(preflight['free_bytes']):.2f} GiB")
+                print(f"  required: {_gib(preflight['required_bytes']):.2f} GiB")
+                print(f"  safe: {'yes' if preflight['safe'] else 'no'}")
+                db.close()
+                return
             before_mb = (
                 os.path.getsize(db_path) / (1024 * 1024)
                 if db_path.exists()

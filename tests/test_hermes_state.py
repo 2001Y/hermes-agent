@@ -4775,6 +4775,15 @@ class TestStateMeta:
 
 
 class TestVacuum:
+    def test_vacuum_refuses_when_rewrite_space_is_not_available(self, db, monkeypatch):
+        class _Usage:
+            free = 0
+
+        monkeypatch.setattr(hermes_state.shutil, "disk_usage", lambda _path: _Usage())
+        with pytest.raises(RuntimeError, match="VACUUM refused"):
+            db.vacuum()
+
+
     def test_vacuum_runs_without_error(self, db):
         """VACUUM must succeed on a fresh DB (no rows to reclaim)."""
         db.create_session(session_id="s1", source="cli")

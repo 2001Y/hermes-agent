@@ -226,6 +226,10 @@ def test_reader_loop_streams_incremental_chunks_from_read1(registry, monkeypatch
     class _FakeStdout:
         def __init__(self, chunks):
             self.buffer = _FakeBuffer(chunks)
+            self.closed_by_reader = False
+
+        def close(self):
+            self.closed_by_reader = True
 
     class _FakeProcess:
         def __init__(self, chunks):
@@ -250,6 +254,7 @@ def test_reader_loop_streams_incremental_chunks_from_read1(registry, monkeypatch
     assert session.output_buffer == "tick 1\ntick 2\ntick 3\n"
     assert session.exited is True
     assert session.exit_code == 0
+    assert session.process.stdout.closed_by_reader is True
     assert moved == ["proc_reader_live"]
 
 

@@ -972,6 +972,16 @@ class ProcessRegistry:
                 session.process.wait(timeout=5)
             except Exception as e:
                 logger.debug("Process wait timed out or failed: %s", e)
+            # ``Popen.wait()`` does not close the parent's read end of
+            # stdout. Finished sessions are retained for a short TTL, so
+            # leaving this stream attached accumulates PIPE descriptors in the
+            # long-lived gateway even after the child has exited.
+            stdout_stream = getattr(session.process, "stdout", None)
+            if stdout_stream is not None:
+                try:
+                    stdout_stream.close()
+                except Exception as e:
+                    logger.debug("Process stdout close failed: %s", e)
             session.exited = True
             if session.completion_reason != "killed":
                 session.exit_code = session.process.returncode

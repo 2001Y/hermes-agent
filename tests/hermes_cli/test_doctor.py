@@ -1656,3 +1656,20 @@ terminal:
         assert "Deprecated: delegation.max_async_children" in out
         assert "Deprecated: HERMES_TOOL_PROGRESS_MODE" in out
         assert "⚠" in out or "Deprecated" in out
+
+
+class TestBoundedStateDBProbe:
+    def test_fast_probe_reads_sessions_without_full_integrity_scan(self, tmp_path):
+        import sqlite3
+
+        db_path = tmp_path / "state.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE sessions (id TEXT)")
+        conn.executemany("INSERT INTO sessions VALUES (?)", [("a",), ("b",)])
+        conn.commit()
+        conn.close()
+
+        assert doctor_mod._fast_state_db_probe(db_path) == (2, None)
+
+    def test_large_database_threshold_is_explicit_and_bounded(self):
+        assert doctor_mod._STATE_DB_FULL_CHECK_MAX_BYTES == 1_000_000_000

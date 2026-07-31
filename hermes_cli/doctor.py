@@ -80,6 +80,53 @@ def _safe_which(cmd: str) -> str | None:
         return None
 
 
+# ``PRAGMA integrity_check`` is intentionally exhaustive: on a large session
+# store it can read every page while holding the doctor process for minutes.
+# Doctor should remain a bounded health check by default; the explicit session
+# repair/check-only path remains available for an offline full inspection.
+_STATE_DB_FULL_CHECK_MAX_BYTES = 1_000_000_000
+
+
+def _fast_state_db_probe(db_path: Path) -> tuple[int, str | None]:
+    """Run a bounded, read-only state DB probe.
+
+    This deliberately does not call ``PRAGMA integrity_check`` or perform the
+    rolled-back FTS write probe.  It verifies that a fresh connection can read
+    the schema, canonical session table, and FTS read paths without turning
+    ``hermes doctor`` into an unbounded full-database scan.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("PRAGMA schema_version").fetchone()
+        count_row = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
+        count = int(count_row[0]) if count_row else 0
+        for fts_table in ("messages_fts", "messages_fts_trigram"):
+            try:
+                conn.execute(
+                    f"SELECT 1 FROM {fts_table} "
+                    f"WHERE {fts_table} MATCH '\"\"' LIMIT 1"
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" in str(exc).lower():
+                    continue
+                error_text = str(exc).lower()
+                if "no such module" in error_text and "fts5" in error_text:
+                    continue
+                if "no such tokenizer" in error_text and "trigram" in error_text:
+                    continue
+                return count, f"FTS read probe failed on {fts_table}: {exc}"
+            except sqlite3.DatabaseError as exc:
+                return count, f"FTS read probe failed on {fts_table}: {exc}"
+        return count, None
+    except (sqlite3.Error, OSError) as exc:
+        return 0, str(exc)
+    finally:
+        conn.close()
+
+
 def _termux_browser_setup_steps(node_installed: bool) -> list[str]:
     steps: list[str] = []
     step = 1
@@ -1369,15 +1416,33 @@ def run_doctor(args):
             count = cursor.fetchone()[0]
             conn.close()
             check_ok(f"{_DHH}/state.db exists ({count} sessions)")
+            from hermes_state import _db_opens_cleanly, repair_state_db_schema
+
+            state_db_size = state_db_path.stat().st_size
+            if state_db_size >= _STATE_DB_FULL_CHECK_MAX_BYTES:
+                fast_count, _fast_reason = _fast_state_db_probe(state_db_path)
+                if _fast_reason is not None:
+                    check_warn(
+                        f"{_DHH}/state.db fast read-health probe failed",
+                        f"({_fast_reason})",
+                    )
+                    _write_reason = _fast_reason
+                else:
+                    check_info(
+                        f"{_DHH}/state.db full FTS probe skipped for bounded doctor "
+                        f"({state_db_size / (1024 * 1024):.1f} MiB; {fast_count} sessions)",
+                    )
+                    _write_reason = None
+            else:
+                _write_reason = None
 
             # FTS write-health probe (#50502): `SELECT COUNT(*)` above succeeds
             # even when the FTS index is corrupt and every message write fails
             # through the triggers. `_db_opens_cleanly` now drives a rolled-back
             # write so this otherwise-silent corruption class is surfaced (and
             # repaired in place with --fix).
-            from hermes_state import _db_opens_cleanly, repair_state_db_schema
-
-            _write_reason = _db_opens_cleanly(state_db_path)
+            if state_db_size < _STATE_DB_FULL_CHECK_MAX_BYTES:
+                _write_reason = _db_opens_cleanly(state_db_path)
             if _write_reason is not None:
                 check_warn(
                     f"{_DHH}/state.db fails a write-health probe (FTS index may be corrupt)",
