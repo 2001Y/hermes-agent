@@ -14634,6 +14634,11 @@ def main():
         action="store_true",
         help="Only report the database size and safe free-space requirement",
     )
+    sessions_optimize.add_argument(
+        "--fts-only",
+        action="store_true",
+        help="Merge FTS5 segments only; do not VACUUM or delete sessions",
+    )
 
     sessions_repair = sessions_subparsers.add_parser(
         "repair",
@@ -15391,6 +15396,26 @@ def main():
 
         elif action == "optimize":
             db_path = db.db_path
+            if getattr(args, "fts_only", False):
+                before_sessions = db.session_count()
+                before_messages = db.message_count()
+                print("Optimizing FTS5 indexes only (no VACUUM; no session deletion)…")
+                try:
+                    n = db.optimize_fts()
+                except Exception as e:
+                    print(f"Error: FTS-only optimization failed: {e}")
+                    db.close()
+                    return
+                after_sessions = db.session_count()
+                after_messages = db.message_count()
+                print(f"Optimized {n} FTS index(es).")
+                print(
+                    f"Sessions: {before_sessions} -> {after_sessions}; "
+                    f"messages: {before_messages} -> {after_messages}"
+                )
+                db.close()
+                return
+
             preflight = db.vacuum_preflight()
             if getattr(args, "dry_run", False):
                 def _gib(value):

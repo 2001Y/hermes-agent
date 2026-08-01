@@ -24,7 +24,8 @@
 - process-registry reader終了時のPopen stdout close。
 - 共通スコアを作らない、FD/DB/command/log adapter方式の`hermes_cli/perf_probe.py`とCLI wrapper。
 - 設定変更（turn/iteration/concurrency/write approval）は検証後にすべて元へ戻した。
-- セッション行を削除せず、`messages_fts`と`messages_fts_trigram`のFTS5 optimizeを実行した。`sessions`は`5818`件のまま。
+- `hermes sessions optimize --fts-only`を追加し、FTS5だけを統合する安全なCLI経路を用意。
+- セッション行を削除せず、`messages_fts`と`messages_fts_trigram`のFTS5 optimizeを実行した。CLI実測は`5824 -> 5824` sessions。
 ## 破壊的操作・未反映
 
 - session削除、VACUUM、Gateway再起動は実施していない。
@@ -40,7 +41,7 @@
 - credential-related selected tests: `123 passed`
 - write approval: `34 passed`
 - usage pricing: `33 passed`（Luna/mini API単価テストを追加）
-- 実DBのFTS5 optimize: `messages_fts`と`messages_fts_trigram`を実行。`sessions`は`5818`件で維持。
+- 実DBのFTS5 optimize: `messages_fts`と`messages_fts_trigram`をCLI経由で実行。`sessions`は`5824 -> 5824`で維持。
 - changed files: `ruff check` pass
 - 全体test suite: `29`件の失敗、2ファイル未実行。失敗はmacOS上にない`systemctl`、`/tmp`→`/private/tmp`正規化、実バイナリの挙動、live-system guard、provider/環境依存など今回変更対象外を含む。今回変更対象のfocused testsはすべてpass。
 - `hermes gateway restart`は、実行元がGateway子プロセスのため安全ガードにより拒否された。設定・コード変更をlive PIDへ反映するには、Gateway外の別シェルで実行する必要がある。
