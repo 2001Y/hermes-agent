@@ -23,13 +23,12 @@
 - `run_tests.sh`がpytestのないvenvを選ばないよう修正。
 - process-registry reader終了時のPopen stdout close。
 - 共通スコアを作らない、FD/DB/command/log adapter方式の`hermes_cli/perf_probe.py`とCLI wrapper。
-- `agent.max_turns=9999`→`90`、`delegation.max_iterations=9999`→`50`、`delegation.max_concurrent_children=99`→`3`。
-- memory/skill write approvalを有効化。
-
+- 設定変更（turn/iteration/concurrency/write approval）は検証後にすべて元へ戻した。
+- セッション行を削除せず、`messages_fts`と`messages_fts_trigram`のFTS5 optimizeを実行した。`sessions`は`5818`件のまま。
 ## 破壊的操作・未反映
 
 - session削除、VACUUM、Gateway再起動は実施していない。
-- 設定・コード変更はファイルへ書き込んだが、稼働中Gateway PID `2858`へはまだ反映していない。
+- 稼働中Gatewayは現在PID `676`。この作業で意図的に再起動はしていないため、liveプロセスのロード済み設定はファイルreadbackとは別に扱う。
 - 圧縮modelは`gpt-5.4-mini`へ戻した。現在の`openai-codex` routeはusage-pricing上`subscription_included`であり、Lunaの方が安いとは判定できない。Lunaを使うA/Bは、実使用量・品質を同じworkloadで取得してから行う。
 
 ## 検証
