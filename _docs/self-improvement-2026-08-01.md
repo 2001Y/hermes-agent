@@ -26,6 +26,8 @@
 - 設定変更（turn/iteration/concurrency/write approval）は検証後にすべて元へ戻した。
 - `hermes sessions optimize --fts-only`を追加し、FTS5だけを統合する安全なCLI経路を用意。
 - セッション行を削除せず、`messages_fts`と`messages_fts_trigram`のFTS5 optimizeを実行した。CLI実測は`5824 -> 5824` sessions。
+- FTS後に発生したWAL約`4.37 GiB`は`PRAGMA wal_checkpoint(TRUNCATE)`で`0`へ戻した。空き容量は約`5.72 GiB`。
+
 ## 破壊的操作・未反映
 
 - session削除、VACUUM、Gateway再起動は実施していない。
