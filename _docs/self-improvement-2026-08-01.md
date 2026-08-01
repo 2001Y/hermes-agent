@@ -14,7 +14,7 @@
 - `VACUUM`はDB再書込みに約`20.74 GiB`を必要とし、空き`6.23 GiB`のためpreflightで拒否される。
 - `hermes doctor`は大DBで全量FTS/write probeを実行せず、bounded read probeへ切り替えた。実行時に`state.db full FTS probe skipped for bounded doctor`を表示し、約10秒で終了した。
 - 既存圧縮ログ46件: median `39.788s`, p90 `251.401s`, 入力token median `233,818`、rough output token median `123,251`。全件`awaiting_real_usage=true`で、実使用量の確定値は未記録。
-
+- 現行OpenAI API単価: Luna `$0.20/$1.20`（input/output per 1M）、GPT-5.4 mini `$0.75/$4.50`。Lunaは両方とも`26.67%`で、`73.33%`安い。
 ## 実装した変更
 
 - 大DB向け`hermes doctor` bounded state DB probe。
@@ -29,7 +29,7 @@
 
 - session削除、VACUUM、Gateway再起動は実施していない。
 - 稼働中Gatewayは現在PID `676`。この作業で意図的に再起動はしていないため、liveプロセスのロード済み設定はファイルreadbackとは別に扱う。
-- 圧縮modelは`gpt-5.4-mini`へ戻した。現在の`openai-codex` routeはusage-pricing上`subscription_included`であり、Lunaの方が安いとは判定できない。Lunaを使うA/Bは、実使用量・品質を同じworkloadで取得してから行う。
+- 圧縮modelは`gpt-5.4-mini`へ戻した。API単価比較ではLunaが安いが、実際の圧縮品質/速度のA/Bはまだ未実施。
 
 ## 検証
 
@@ -39,7 +39,8 @@
 - checkpoint manager: `77 passed`
 - credential-related selected tests: `123 passed`
 - write approval: `34 passed`
-- usage pricing: `31 passed`
+- usage pricing: `33 passed`（Luna/mini API単価テストを追加）
+- 実DBのFTS5 optimize: `messages_fts`と`messages_fts_trigram`を実行。`sessions`は`5818`件で維持。
 - changed files: `ruff check` pass
 - 全体test suite: `29`件の失敗、2ファイル未実行。失敗はmacOS上にない`systemctl`、`/tmp`→`/private/tmp`正規化、実バイナリの挙動、live-system guard、provider/環境依存など今回変更対象外を含む。今回変更対象のfocused testsはすべてpass。
 - `hermes gateway restart`は、実行元がGateway子プロセスのため安全ガードにより拒否された。設定・コード変更をlive PIDへ反映するには、Gateway外の別シェルで実行する必要がある。

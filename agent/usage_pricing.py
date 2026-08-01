@@ -104,10 +104,10 @@ _UTC_NOW = lambda: datetime.now(timezone.utc)
 # semantics are stable enough to encode exactly.
 _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
     # ── OpenAI GPT-5.6 series (Sol/Terra/Luna) ───────────────────────────
-    # Announced in limited preview 2026-06-26; GA 2026-07-09 at the same
-    # rates (Sol $5/$30, Terra $2.50/$15, Luna $1/$6 per 1M in/out). Cache
-    # writes are billed at 1.25x the uncached input rate; cache reads get the
-    # standard 90% discount (0.10x input, confirmed: Sol $0.50/M cached).
+    # Sol/Terra rates below come from the GPT-5.6 launch snapshot. Luna's
+    # current model page supersedes its launch-preview rate with $0.20/$1.20
+    # per 1M input/output tokens; cache reads are 0.10x input and writes are
+    # 1.25x input. Keep Luna's current page as the source for that entry.
     # Note: "Sol Fast mode" ($12.5/$75, up to 750 tok/s via Cerebras) is a
     # separate serving tier, not covered by these entries. The "-pro"
     # variants (high-effort modes, GA alongside base tiers) bill at the
@@ -143,13 +143,25 @@ _OFFICIAL_DOCS_PRICING: Dict[tuple[str, str], PricingEntry] = {
         "openai",
         "gpt-5.6-luna",
     ): PricingEntry(
-        input_cost_per_million=Decimal("1.00"),
-        output_cost_per_million=Decimal("6.00"),
-        cache_read_cost_per_million=Decimal("0.10"),
-        cache_write_cost_per_million=Decimal("1.25"),
+        input_cost_per_million=Decimal("0.20"),
+        output_cost_per_million=Decimal("1.20"),
+        cache_read_cost_per_million=Decimal("0.02"),
+        cache_write_cost_per_million=Decimal("0.25"),
         source="official_docs_snapshot",
-        source_url="https://openai.com/index/previewing-gpt-5-6-sol/",
-        pricing_version="openai-gpt-5.6-2026-07",
+        source_url="https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+        pricing_version="openai-gpt-5.6-luna-2026-08",
+    ),
+    (
+        "openai",
+        "gpt-5.4-mini",
+    ): PricingEntry(
+        input_cost_per_million=Decimal("0.75"),
+        output_cost_per_million=Decimal("4.50"),
+        cache_read_cost_per_million=Decimal("0.075"),
+        cache_write_cost_per_million=Decimal("0.9375"),
+        source="official_docs_snapshot",
+        source_url="https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+        pricing_version="openai-gpt-5.4-mini-2026-08",
     ),
     # ── Anthropic Claude 4.8 ─────────────────────────────────────────────
     # Same $5/$25 base pricing as 4.6/4.7.  Fast-mode variant is a separate

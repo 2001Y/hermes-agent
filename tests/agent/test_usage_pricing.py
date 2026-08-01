@@ -183,6 +183,37 @@ def test_estimate_usage_cost_marks_subscription_routes_included():
     assert float(result.amount_usd) == 0.0
 
 
+def test_openai_luna_and_mini_use_current_official_unit_prices():
+    usage = CanonicalUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+
+    luna = estimate_usage_cost("gpt-5.6-luna", usage, provider="openai")
+    mini = estimate_usage_cost("gpt-5.4-mini", usage, provider="openai")
+
+    assert luna.status == "estimated"
+    assert mini.status == "estimated"
+    assert luna.amount_usd is not None
+    assert mini.amount_usd is not None
+    assert float(luna.amount_usd) == 1.40
+    assert float(mini.amount_usd) == 5.25
+
+
+def test_openai_luna_and_mini_cache_rates_are_current():
+    usage = CanonicalUsage(
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=1_000_000,
+        cache_write_tokens=1_000_000,
+    )
+
+    luna = estimate_usage_cost("gpt-5.6-luna", usage, provider="openai")
+    mini = estimate_usage_cost("gpt-5.4-mini", usage, provider="openai")
+
+    assert luna.amount_usd is not None
+    assert mini.amount_usd is not None
+    assert float(luna.amount_usd) == 0.27
+    assert float(mini.amount_usd) == 1.0125
+
+
 def test_estimate_usage_cost_refuses_cache_pricing_without_official_cache_rate(monkeypatch):
     monkeypatch.setattr(
         "agent.usage_pricing.fetch_model_metadata",
