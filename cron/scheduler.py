@@ -106,14 +106,14 @@ def _summarize_cron_failure_for_delivery(job: dict, error: str | None) -> str:
         elif "quota" in lower:
             reason = "quota limit"
         return (
-            f"⚠️ Cron '{job_name}' failed: provider {reason}. "
+            f"🚨 Cron '{job_name}' failed: provider {reason}. "
             "Fallback chain was exhausted or unavailable. "
             "Full details saved in cron output."
         )
 
     if "readtimeout" in lower or "timed out" in lower or "timeout" in lower:
         return (
-            f"⚠️ Cron '{job_name}' failed: provider timeout. "
+            f"🚨 Cron '{job_name}' failed: provider timeout. "
             "Fallback chain was exhausted or unavailable. "
             "Full details saved in cron output."
         )
@@ -123,7 +123,7 @@ def _summarize_cron_failure_for_delivery(job: dict, error: str | None) -> str:
     # not trip a misleading auth message.
     if re.search(r"authenticat|authoriz", lower) or re.search(r"\b(401|403)\b", text):
         return (
-            f"⚠️ Cron '{job_name}' failed: provider authentication error. "
+            f"🚨 Cron '{job_name}' failed: provider authentication error. "
             "Full details saved in cron output."
         )
 
@@ -137,7 +137,7 @@ def _summarize_cron_failure_for_delivery(job: dict, error: str | None) -> str:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if len(cleaned) > 180:
         cleaned = cleaned[:177].rstrip() + "..."
-    return f"⚠️ Cron '{job_name}' failed: {cleaned}"
+    return f"🚨 Cron '{job_name}' failed: {cleaned}"
 
 
 class CronPromptInjectionBlocked(Exception):
