@@ -1,4 +1,4 @@
-"""Strict redaction at every compaction text boundary (issue #43666 item 2).
+"""Redaction at every compaction text boundary (issue #43666 item 2).
 
 Compaction summaries persist across sessions and re-enter every subsequent
 summarizer prompt, so ``_redact_compaction_text()`` applies strict mode
@@ -10,11 +10,10 @@ summarizer prompt, so ``_redact_compaction_text()`` applies strict mode
 - focus text (manual ``/compress <focus>`` and ``_derive_auto_focus_topic``)
 - previous-summary re-entry into the iterative-update prompt
 
-Every test disables the global redaction flag (simulating
-``security.redact_secrets: false``) to prove ``force=True`` still redacts at
-the persistence boundary, and uses an OAuth-callback-style URL to prove
-``redact_url_credentials=True`` strips opaque URL tokens that default-mode
-redaction deliberately passes through.
+The default tests keep the global flag enabled and prove that compaction still
+redacts at every persistence boundary. Dedicated opt-out tests prove that
+``security.redact_secrets: false`` is a literal opt-out, including the former
+``force=True`` and URL-credential boundaries.
 """
 
 from unittest.mock import MagicMock, patch
@@ -35,9 +34,9 @@ OAUTH_URL = (
 
 
 @pytest.fixture(autouse=True)
-def _redaction_globally_disabled(monkeypatch):
-    """Simulate security.redact_secrets: false — force=True must still win."""
-    monkeypatch.setattr("agent.redact._REDACT_ENABLED", False)
+def _redaction_globally_enabled(monkeypatch):
+    """Keep the default protection enabled for the boundary regression tests."""
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", True)
 
 
 def _compressor() -> ContextCompressor:
@@ -65,11 +64,37 @@ def _assert_clean(text: str):
     assert "state=keep" in text
 
 
-def test_helper_is_strict_even_when_redaction_disabled():
+def _assert_raw(text: str):
+    assert SECRET in text
+    assert "code=opaque-code-123" in text
+    assert "access_token=opaque-token-456" in text
+    assert "code=***" not in text
+    assert "access_token=***" not in text
+
+
+def test_helper_is_strict_when_redaction_enabled():
     result = _redact_compaction_text(f"key {SECRET} url {OAUTH_URL}")
     _assert_clean(result)
     # None-safety: helper is used on optional fields.
     assert _redact_compaction_text(None) == ""
+
+
+def test_helper_preserves_raw_text_when_redaction_disabled(monkeypatch):
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", False)
+
+    result = _redact_compaction_text(f"key {SECRET} url {OAUTH_URL}")
+
+    _assert_raw(result)
+
+
+def test_serializer_preserves_raw_text_when_redaction_disabled(monkeypatch):
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", False)
+    c = _compressor()
+    messages = [{"role": "user", "content": f"token {SECRET} url {OAUTH_URL}"}]
+
+    serialized = c._serialize_for_summary(messages)
+
+    _assert_raw(serialized)
 
 
 def test_serializer_input_redacts_content_and_tool_args():

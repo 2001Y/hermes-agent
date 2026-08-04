@@ -243,6 +243,12 @@ def redact_outbound(text: str) -> str:
     """Scrub credential-shaped substrings before sending text to a peer."""
     if not text:
         return text
+    try:
+        from agent.redact import redaction_enabled
+        if not redaction_enabled():
+            return text
+    except Exception:
+        pass
     out = text
     for pat, repl in _REDACTION_PATTERNS:
         out = pat.sub(repl, out)

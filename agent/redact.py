@@ -68,6 +68,18 @@ _SENSITIVE_BODY_KEYS = frozenset({
 # downgrade — see `_log_redaction_status()` in gateway/run.py and cli.py.
 _REDACT_ENABLED = os.getenv("HERMES_REDACT_SECRETS", "true").lower() in {"1", "true", "yes", "on"}
 
+
+def redaction_enabled() -> bool:
+    """Return whether the process-wide secret/PII redaction gate is enabled.
+
+    The value is intentionally a process-start snapshot.  Callers that add a
+    second, local redaction pass (for example a gateway or monitoring
+    exporter) must consult this gate before applying that pass; ``force=True``
+    is retained for call-site compatibility but never overrides an explicit
+    global opt-out.
+    """
+    return _REDACT_ENABLED
+
 # Known API key prefixes -- match the prefix + contiguous token chars
 _PREFIX_PATTERNS = [
     r"sk-[A-Za-z0-9_-]{10,}",           # OpenAI / OpenRouter / Anthropic (sk-ant-*)
@@ -597,6 +609,8 @@ def redact_cdp_url(value: object) -> str:
     -- see ``tools.browser_supervisor._redact_cdp_error_text``.
     """
     text = redact_sensitive_text("" if value is None else str(value))
+    if not redaction_enabled():
+        return text
     if not text:
         return text
     text = _redact_url_query_params(text)
@@ -668,8 +682,9 @@ def redact_sensitive_text(
 
     Safe to call on any string -- non-matching text passes through unchanged.
     Enabled by default. Disable via security.redact_secrets: false in config.yaml.
-    Set force=True for safety boundaries that must never return raw secrets
-    regardless of the user's global logging redaction preference.
+    Set force=True for callers that want strict redaction while the global
+    gate is enabled.  An explicit ``security.redact_secrets: false`` opt-out
+    takes precedence even at former force-redaction boundaries.
 
     Set redact_url_credentials=True at non-navigation egress boundaries to
     additionally redact credential-named query parameters and ``user:pass@``
@@ -707,7 +722,7 @@ def redact_sensitive_text(
         text = str(text)
     if not text:
         return text
-    if not (force or _REDACT_ENABLED):
+    if not _REDACT_ENABLED:
         return text
 
     # file_read content shouldn't hit the source-code ENV/JSON false-positive
@@ -930,8 +945,9 @@ def redact_terminal_output(
     - anything else (or unknown command) → ``code_file=True`` to avoid
       false positives on source/config dumps.
 
-    ``force=True`` bypasses the global ``security.redact_secrets`` preference
-    for safety boundaries that must never emit raw credentials.
+    ``force=True`` requests strict redaction while the global gate is enabled;
+    an explicit ``security.redact_secrets: false`` opt-out still returns raw
+    output at former safety boundaries.
     """
     if not output:
         return output

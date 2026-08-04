@@ -347,6 +347,12 @@ def _redact_sensitive(text: str) -> str:
     """
     if not text:
         return text
+    try:
+        from agent.redact import redaction_enabled
+        if not redaction_enabled():
+            return text
+    except Exception:
+        pass
     text = re.sub(
         r"projects/[^/\s]+/subscriptions/[^/\s]+",
         "projects/<redacted>/subscriptions/<redacted>",

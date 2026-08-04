@@ -273,14 +273,21 @@ class TestReinjectionBoundsAndRedaction:
         # The cap is applied at the collection sites in _generate_summary /
         # _build_static_fallback_summary; the helper itself is mechanical.
 
-    def test_reinjection_block_is_redacted(self, monkeypatch):
+    def test_reinjection_block_is_redacted_when_enabled(self, monkeypatch):
         import agent.redact as redact_mod
 
-        # force=True redaction must win even when redaction is disabled.
-        monkeypatch.setattr(redact_mod, "_REDACT_ENABLED", False, raising=False)
+        monkeypatch.setattr(redact_mod, "_REDACT_ENABLED", True, raising=False)
         secret = "ghp_" + "a1B2" * 6
         out = _reinject_pruned_skill_markers("body", [f"x {secret}"])
         assert secret not in out
+
+    def test_reinjection_block_preserves_raw_when_disabled(self, monkeypatch):
+        import agent.redact as redact_mod
+
+        monkeypatch.setattr(redact_mod, "_REDACT_ENABLED", False, raising=False)
+        secret = "ghp_" + "a1B2" * 6
+        out = _reinject_pruned_skill_markers("body", [f"x {secret}"])
+        assert secret in out
 
 
 class TestSkillsGuidanceSafetyRule:

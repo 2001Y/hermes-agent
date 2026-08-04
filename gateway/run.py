@@ -452,15 +452,22 @@ def _redact_gateway_user_facing_secrets(text: str) -> str:
     same Tirith-grade redactor already applied to logs, tool output, and
     approval-command prompts — so the outbound chat path masks the full
     credential set the startup banner promises ("chat responses are scrubbed
-    before delivery"), not a divergent subset. ``force=True`` honors redaction
-    even when ``security.redact_secrets`` is off, matching the
-    ``_redact_approval_command`` reasoning (#23810).
+    before delivery"), not a divergent subset. ``force=True`` requests strict
+    redaction while the global gate is enabled; an explicit
+    ``security.redact_secrets: false`` opt-out takes precedence, including at
+    this former hard boundary.
 
     The narrow ``_GATEWAY_SECRET_PATTERNS`` set runs as a belt-and-suspenders
     second pass so nothing the gateway historically caught can regress, and so
     redaction still degrades gracefully if the import ever fails.
     """
     redacted = str(text or "")
+    try:
+        from agent.redact import redaction_enabled
+        if not redaction_enabled():
+            return redacted
+    except Exception:
+        pass
     try:
         from agent.redact import redact_sensitive_text
 
@@ -481,9 +488,9 @@ def _redact_approval_command(cmd: "str | None") -> str:
     is built from the raw command string, so a credential-shaped value Tirith
     flagged would otherwise be echoed verbatim to the chat platform (#48456).
     Uses ``redact_sensitive_text(force=True)`` — the same Tirith-grade redactor
-    — so the prompt honors redaction even when ``security.redact_secrets`` is
-    off. Module-level so the wiring is unit-testable (the call site is a deeply
-    nested gateway closure that cannot be driven directly).
+    — while the global gate is enabled. Module-level so the wiring is
+    unit-testable (the call site is a deeply nested gateway closure that cannot
+    be driven directly).
     """
     from agent.redact import redact_sensitive_text
 

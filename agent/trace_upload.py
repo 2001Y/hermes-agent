@@ -16,7 +16,8 @@ Design notes
 * **Private by default.** Traces can contain prompts, tool output, local
   paths, and secrets. The dataset is created private and every text body
   is passed through Hermes' secret redactor (``force=True``) unless the
-  caller explicitly opts out with ``redact=False``.
+  caller explicitly opts out with ``redact=False`` or the process-wide
+  ``security.redact_secrets: false`` gate is active.
 * **Never raises.** Returns a user-facing status string so command
   handlers can echo it straight back to the user. Programmatic callers
   that need the URL can use :func:`build_trace_jsonl` + :func:`_do_upload`
@@ -59,8 +60,8 @@ def _redact(text: Any, enabled: bool) -> Any:
     """Redact secrets from a string body when redaction is enabled.
 
     Non-strings pass through untouched. Uses Hermes' shared redactor with
-    ``force=True`` so an upload always scrubs known secret shapes even if
-    the user disabled log redaction globally.
+    ``force=True`` while the global gate is enabled; the explicit process-wide
+    opt-out also applies to trace uploads.
     """
     if not enabled or not isinstance(text, str) or not text:
         return text

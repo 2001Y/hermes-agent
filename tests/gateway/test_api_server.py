@@ -67,12 +67,13 @@ class TestRedactApiErrorText:
         assert secret not in out
         assert "OPENAI_API_KEY=" in out
 
-    def test_redacts_regardless_of_global_redaction_setting(self):
-        # force=True must mask even when global redaction is disabled.
-        secret = "sk-forced-redaction-0987654321"
+    def test_preserves_raw_error_when_global_redaction_is_disabled(self):
+        # The global opt-out includes this former force=True boundary.
+        secret = "«redacted:sk-…»"
         with patch("agent.redact._REDACT_ENABLED", False):
             out = _redact_api_error_text(Exception(f"boom AWS_SECRET_ACCESS_KEY={secret}"))
-        assert secret not in out
+        assert out == f"boom AWS_SECRET_ACCESS_KEY={secret}"
+        assert secret in out
 
     def test_limit_truncates_after_redaction(self):
         assert len(_redact_api_error_text("x" * 500, limit=50)) == 50

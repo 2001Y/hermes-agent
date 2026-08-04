@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 # aggregator prompt (issue #59959). Secret/credential shapes (API-key
 # prefixes, JWTs, private keys, DB connection strings, E.164 phone numbers)
 # are handled by the repo's central redactor, ``agent.redact
-# .redact_sensitive_text`` — the MoA filter never re-implements those. The
+# .redact_sensitive_text`` — the MoA filter never re-implements those when
+# enabled. The global opt-out also disables the MoA-specific PII pass. The
 # two patterns below cover the PII classes the central redactor deliberately
 # leaves alone for log/tool output (emails and formatted phone numbers).
 #
@@ -57,15 +58,17 @@ _MOA_PHONE_RE = re.compile(
 def _redact_reference_text(text: Any) -> Any:
     """Redact secrets + PII from one advisor/reference text surface.
 
-    Centralized secret shapes first (force=True: the MoA privacy filter is
-    its own explicit opt-in, independent of the global log-redaction toggle;
-    code_file=True: advisory text is prose/code, so the ENV/JSON assignment
-    heuristics that mangle source snippets stay off), then the MoA-specific
-    email/formatted-phone patterns. Non-string inputs pass through unchanged.
+    Centralized secret shapes first (force=True while the global gate is
+    enabled; code_file=True keeps advisory prose/code from triggering
+    source-snippet false positives), then the MoA-specific email/formatted-
+    phone patterns. Non-string inputs pass through unchanged.
     """
     if not isinstance(text, str) or not text:
         return text
-    from agent.redact import redact_sensitive_text
+    from agent.redact import redact_sensitive_text, redaction_enabled
+
+    if not redaction_enabled():
+        return text
 
     text = redact_sensitive_text(text, force=True, code_file=True)
     text = _MOA_EMAIL_RE.sub("[redacted email]", text)

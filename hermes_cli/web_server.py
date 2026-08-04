@@ -874,6 +874,24 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "description": "Context window override (0 = auto-detect from model metadata)",
         "category": "general",
     },
+    "security.redact_secrets": {
+        "type": "boolean",
+        "description": (
+            "Redact secret-like values across tool inputs and outputs, retained model "
+            "context, logs, monitoring, and gateway/external chat surfaces. Disable "
+            "only in a trusted environment; this also disables former force-redaction "
+            "boundaries and requires a restart."
+        ),
+        "category": "security",
+    },
+    "security.computer_use_safety_guidance": {
+        "type": "boolean",
+        "description": (
+            "Include model-facing computer-use safety instructions in the system "
+            "prompt for new sessions. Tool-level hard guards remain independent."
+        ),
+        "category": "security",
+    },
     "terminal.backend": {
         "type": "select",
         "description": "Terminal execution backend",

@@ -287,6 +287,12 @@ def redact_phone(phone: str) -> str:
     Replaces the identical ``_redact_phone()`` functions in signal.py,
     sms.py, and bluebubbles.py.
     """
+    try:
+        from agent.redact import redaction_enabled
+        if not redaction_enabled():
+            return phone
+    except Exception:
+        pass
     if not phone:
         return "<none>"
     if len(phone) <= 8:

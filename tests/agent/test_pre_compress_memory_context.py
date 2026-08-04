@@ -95,7 +95,7 @@ def test_memory_context_injected_into_iterative_summary_prompt():
     assert "Checkpoint id: ctx-123" in prompts[0]
 
 
-def test_memory_context_is_strictly_redacted_before_summary_llm(monkeypatch):
+def test_memory_context_preserves_raw_values_when_redaction_is_disabled(monkeypatch):
     compressor = _make_compressor()
     prefix_secret = "sk-" + "b" * 30
     query_secret = "opaque-query-secret"
@@ -127,19 +127,19 @@ def test_memory_context_is_strictly_redacted_before_summary_llm(monkeypatch):
 
     assert len(prompts) == 1
     prompt = prompts[0]
-    assert prefix_secret not in prompt
-    assert query_secret not in prompt
-    assert userinfo_value not in prompt
-    assert hyphen_client_secret not in prompt
-    assert hyphen_access_secret not in prompt
-    assert hyphen_api_secret not in prompt
-    assert encoded_hyphen_secret not in prompt
-    assert "token=***" in prompt
-    assert "https://user:***@example.test/private" in prompt
-    assert "client-secret=***" in prompt
-    assert "Access-Token=***" in prompt
-    assert "api-key=***" in prompt
-    assert "client%2Dsecret=***" in prompt
+    assert prefix_secret in prompt
+    assert query_secret in prompt
+    assert userinfo_value in prompt
+    assert hyphen_client_secret in prompt
+    assert hyphen_access_secret in prompt
+    assert hyphen_api_secret in prompt
+    assert encoded_hyphen_secret in prompt
+    assert "token=***" not in prompt
+    assert "https://user:***@example.test/private" not in prompt
+    assert "client-secret=***" not in prompt
+    assert "Access-Token=***" not in prompt
+    assert "api-key=***" not in prompt
+    assert "client%2Dsecret=***" not in prompt
 
 
 

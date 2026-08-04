@@ -103,12 +103,12 @@ def test_kanban_comment_no_secret_passthrough(worker_env):
 
 
 # ---------------------------------------------------------------------------
-# Negative test — force=True bypasses HERMES_REDACT_SECRETS=false
+# Global opt-out includes the former force=True storage boundary.
 # ---------------------------------------------------------------------------
 
-def test_scrub_respects_force_flag_regardless_of_config(worker_env, monkeypatch):
-    """force=True must fire even when HERMES_REDACT_SECRETS=false is set."""
-    monkeypatch.setenv("HERMES_REDACT_SECRETS", "false")
+def test_scrub_preserves_raw_when_redaction_is_disabled(worker_env, monkeypatch):
+    """force=True must not override an explicit global opt-out."""
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", False)
     from tools import kanban_tools as kt
     from hermes_cli import kanban_db as kb
     secret = "ghp_" + "C" * 40
@@ -119,7 +119,7 @@ def test_scrub_respects_force_flag_regardless_of_config(worker_env, monkeypatch)
     finally:
         conn.close()
     stored = comments[-1].body
-    assert secret not in stored
+    assert stored == f"token: {secret}"
 
 
 # ---------------------------------------------------------------------------

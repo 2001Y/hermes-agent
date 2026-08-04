@@ -2131,6 +2131,9 @@ DEFAULT_CONFIG = {
     "security": {
         "allow_private_urls": False,  # Allow requests to private/internal IPs (for OpenWrt, proxies, VPNs)
         "redact_secrets": True,
+        # Include model-facing computer-use safety guidance in the system
+        # prompt. Tool-level hard guards remain independent of this toggle.
+        "computer_use_safety_guidance": True,
         "tirith_enabled": True,
         "tirith_path": "tirith",
         "tirith_timeout": 5,

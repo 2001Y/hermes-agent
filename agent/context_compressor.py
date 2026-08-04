@@ -679,12 +679,12 @@ def _redact_compaction_text(text: Any) -> str:
     """Redact text that crosses a compaction summary boundary.
 
     Compaction summaries persist across sessions and are re-injected into
-    every subsequent summarizer prompt, so this boundary uses strict mode:
+    every subsequent summarizer prompt, so this boundary requests strict mode
+    while the global gate is enabled:
 
-    - ``force=True`` — deliberately overrides ``security.redact_secrets:
-      false``. That opt-out targets *live tool output* (e.g. working on the
-      redactor itself); a summary is a persistence boundary where a leaked
-      credential keeps re-entering prompts indefinitely.
+    - ``force=True`` — requests redaction at the former persistence boundary.
+      An explicit ``security.redact_secrets: false`` opt-out takes precedence,
+      including summaries and auxiliary-model prompts.
     - ``redact_url_credentials=True`` — OAuth callback codes, magic-link
       tokens, and URL userinfo never need to survive summarization the way
       they must survive live navigation flows.
@@ -3119,9 +3119,10 @@ class ContextCompressor(ContextEngine):
         ``_CONTENT_MAX`` chars per message) so the summarizer can preserve
         specific details like file paths, commands, and outputs.
 
-        All content is redacted before serialization to prevent secrets
-        (API keys, tokens, passwords) from leaking into the summary that
-        gets sent to the auxiliary model and persisted across compactions.
+        When redaction is enabled, all content is redacted before serialization
+        to prevent secrets (API keys, tokens, passwords) from leaking into the
+        summary that gets sent to the auxiliary model and persisted across
+        compactions. The explicit global opt-out preserves raw content.
         """
         # Lazy import (matches title_generator.py) — agent_runtime_helpers
         # pulls in heavy transitive imports we don't want at module load.
@@ -3861,8 +3862,8 @@ This compaction should PRIORITISE preserving all information related to the focu
             stripped = strip_think_blocks(None, content).strip()
             if stripped:
                 content = stripped
-            # Redact the summary output as well — the summarizer LLM may
-            # ignore prompt instructions and echo back secrets verbatim.
+            # Request redaction of the summary output as well — the summarizer
+            # LLM may ignore prompt instructions and echo back secrets verbatim.
             summary = _redact_compaction_text(content.strip())
             # P2 ghost-skill defense (#32106): deterministically restore any
             # [SKILL_PRUNED: ...] marker the summarizer paraphrased away.

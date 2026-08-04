@@ -370,9 +370,9 @@ def redact_browser_typed_text_for_display(value: Any, typed_text: Any) -> Any:
     Normal typed text (search queries, addresses, form fields) matches no
     secret pattern, so it passes through unchanged and stays readable.
 
-    Redaction is forced here regardless of the global ``security.redact_secrets``
-    preference: a typed credential leaking into chat history is a security
-    boundary, not mere log hygiene.
+    ``force=True`` requests redaction while the global gate is enabled. The
+    explicit ``security.redact_secrets: false`` opt-out takes precedence even
+    here, so a trusted raw-debugging session can observe the typed value.
     """
     if typed_text is None:
         return value

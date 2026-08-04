@@ -482,6 +482,12 @@ def _sanitize_error(text: str) -> str:
     Replaces tokens, keys, and other secrets with [REDACTED] to prevent
     accidental credential exposure in tool error responses.
     """
+    try:
+        from agent.redact import redaction_enabled
+        if not redaction_enabled():
+            return text
+    except Exception:
+        pass
     return _CREDENTIAL_PATTERN.sub("[REDACTED]", text)
 
 

@@ -2775,9 +2775,10 @@ def _store_full_snapshot(snapshot_text: str) -> Optional[str]:
     page through the complete accessibility tree — including element refs that
     the truncated view dropped — on any backend.
 
-    The stored copy is secret-redacted (same force-redaction boundary as
-    ``_redact_browser_output``) since page-rendered API keys or tokens must
-    not be written to disk unmasked. The filename is keyed on a content hash,
+    The stored copy requests secret redaction (same force-redaction boundary as
+    ``_redact_browser_output``) while the global redaction gate is enabled.
+    With the explicit opt-out, page-rendered API keys or tokens are written
+    raw by design. The filename is keyed on a content hash,
     so repeated snapshots of the same page state dedupe to one file. Returns
     None on failure (storage is best-effort; the truncated view is still
     returned to the model).
@@ -2922,8 +2923,8 @@ def _redact_browser_output(value: Any) -> Any:
 
     Browser snapshots, console messages, JS exceptions, and eval results can
     contain page-rendered API keys, cookies, bearer tokens, or pasted secrets.
-    Tool output is a model boundary, so force redaction here even if global log
-    redaction is disabled for debugging.
+    Tool output is a model boundary, so request force redaction here while the
+    global gate is enabled. The explicit global opt-out still takes precedence.
     """
     from agent.redact import redact_sensitive_text
 

@@ -3430,15 +3430,18 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
 _SECURITY_COMMENT = """
 # ── Security ──────────────────────────────────────────────────────────
 # Secret redaction is ON by default — strings that look like API keys,
-# tokens, and passwords are masked in tool output, logs, and chat
-# responses before the model or user ever sees them. Set redact_secrets
-# to false to disable (e.g. when developing the redactor itself).
+# tokens, and passwords are masked in tool output, model context, logs,
+# monitoring exports, and gateway/external chat responses before the model or
+# user ever sees them. Set redact_secrets to false to disable every redaction
+# plane (including former force=True boundaries), e.g. when developing the
+# redactor itself. This does not disable Tirith or tool-level hard guards.
 # tirith pre-exec scanning is enabled by default when the tirith binary
 # is available. Configure via security.tirith_* keys or env vars
 # (TIRITH_ENABLED, TIRITH_BIN, TIRITH_TIMEOUT, TIRITH_FAIL_OPEN).
 #
 # security:
 #   redact_secrets: true
+#   computer_use_safety_guidance: true
 #   tirith_enabled: true
 #   tirith_path: "tirith"
 #   tirith_timeout: 5
@@ -3473,10 +3476,12 @@ _FALLBACK_COMMENT = """
 _COMMENTED_SECTIONS = """
 # ── Security ──────────────────────────────────────────────────────────
 # Secret redaction is ON by default. Set to false to pass tool output,
-# logs, and chat responses through unmodified (e.g. for redactor dev).
+# model context, logs, monitoring, and chat responses through unmodified,
+# including former force=True boundaries (e.g. for redactor development).
 #
 # security:
 #   redact_secrets: true
+#   computer_use_safety_guidance: true
 
 # ── Fallback Model ────────────────────────────────────────────────────
 # Automatic provider failover when primary is unavailable.

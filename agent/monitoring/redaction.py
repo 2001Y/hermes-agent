@@ -1,18 +1,19 @@
 """Redaction applied to monitoring data before egress.
 
-One unconditional scrub, no modes, no knobs. Every string that leaves the
+When ``security.redact_secrets`` is enabled, every string that leaves the
 process passes through ``redact_for_export``:
 
   * Secrets first — wraps ``agent/redact.py::redact_sensitive_text(force=True)``
     plus bearer/token-shape patterns, and fails CLOSED: if the redactor cannot
-    run, the raw string is never emitted.
+    run, the raw string is never emitted. The explicit global opt-out also
+    disables this local pass, including PII scrubbing below.
   * PII second — e-mail addresses, phone numbers, and UUID-shaped identifiers
     are rewritten to ``[email]`` / ``[phone]`` / ``[id]``.
 
-There is deliberately no setting to weaken this. The monitoring plane is
-content-free by design: rendered log messages are not exported, and bounded
-structured strings are still scrubbed as defense-in-depth. This redactor also
-remains available for a future, explicitly gated redacted-message detail mode.
+The monitoring plane is content-free by design when enabled: rendered log
+messages are not exported, and bounded structured strings are still scrubbed as
+defense-in-depth. A trusted deployment can explicitly opt out through the
+process-wide redaction setting when raw monitoring values are intentional.
 """
 
 from __future__ import annotations
@@ -41,9 +42,11 @@ _UUID_RE = re.compile(
 
 
 def _secret_redact(text: str) -> str:
-    """Always-on secret redaction. force=True so user config can't disable it."""
+    """Apply the shared secret redactor when the global gate is enabled."""
     try:
-        from agent.redact import redact_sensitive_text
+        from agent.redact import redact_sensitive_text, redaction_enabled
+        if not redaction_enabled():
+            return text
         out = redact_sensitive_text(text, force=True)
     except Exception:
         # Fail CLOSED: if the redactor can't run, do not emit the raw string.
@@ -56,9 +59,15 @@ def _secret_redact(text: str) -> str:
 
 
 def redact_for_export(text: Optional[str]) -> Optional[str]:
-    """Scrub a string for egress: secrets, then PII. Unconditional."""
+    """Scrub a string for egress: secrets, then PII, when enabled."""
     if text is None:
         return None
+    try:
+        from agent.redact import redaction_enabled
+        if not redaction_enabled():
+            return str(text)
+    except Exception:
+        pass
     out = _secret_redact(str(text))
     out = _EMAIL_RE.sub("[email]", out)
     out = _UUID_RE.sub("[id]", out)

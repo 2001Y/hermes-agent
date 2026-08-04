@@ -220,11 +220,12 @@ def redact_session_data(session: dict[str, Any]) -> dict[str, Any]:
     """Return a deep copy of a session export dict with secrets redacted.
 
     Runs every message's content and tool-call arguments through the
-    force-mode redaction pass (``agent.redact.redact_sensitive_text``), so
+    force-mode redaction pass (``agent.redact.redact_sensitive_text``) while
+    the global gate is enabled, so
     API keys, tokens, and credentials that appeared in tool output never
-    land in plaintext export files. Force mode ignores the user's global
-    ``security.redact_secrets`` preference — an explicit ``--redact`` export
-    must never emit raw secrets.
+    land in plaintext export files. An explicit
+    ``security.redact_secrets: false`` opt-out takes precedence even for an
+    explicit ``--redact`` export.
     """
     from agent.redact import redact_sensitive_text
 

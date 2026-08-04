@@ -94,10 +94,11 @@ def _redact(text: str) -> str:
     — so a transcript that skipped it is the one place the operator's keys
     land in plaintext.
 
-    ``force=True``: this is a safety boundary, so it must redact even when the
-    global toggle is off. Withholds the line rather than emitting raw text if
-    the redactor is somehow unavailable — losing a debug line costs less than
-    writing a live credential into a sandbox-readable file.
+    ``force=True`` requests redaction while the global gate is enabled. The
+    explicit global opt-out returns raw text by design. If the redactor is
+    unavailable, withhold the line rather than emitting raw text — losing a
+    debug line costs less than writing an uncertain value into a
+    sandbox-readable file.
     """
     if not text:
         return text

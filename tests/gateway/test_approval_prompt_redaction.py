@@ -50,14 +50,13 @@ class TestRedactApprovalCommand:
         assert _FAKE_JWT not in out
 
 
-    def test_forces_redaction_even_when_disabled(self, monkeypatch):
-        """force=True must redact even if security.redact_secrets is off -- the
-        approval prompt is a hard secret-egress boundary regardless of config."""
-        raw = "curl -H 'Authorization: token " + _FAKE_GHP + "' https://api.github.com"
-        # With redaction globally disabled, the seam must STILL redact (force=True).
+    def test_preserves_raw_command_when_redaction_is_disabled(self, monkeypatch):
+        """The global opt-out includes the former force=True approval boundary."""
+        raw = "curl -H 'Authorization: *** " + _FAKE_GHP + "' https://api.github.com"
         monkeypatch.setattr("agent.redact._REDACT_ENABLED", False, raising=False)
         out = _redact_approval_command(raw)
-        assert _FAKE_GHP not in out
+        assert out == raw
+        assert _FAKE_GHP in out
 
 
 class TestApprovalCommandWiring:

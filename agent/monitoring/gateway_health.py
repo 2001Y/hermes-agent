@@ -56,8 +56,8 @@ def redact_gateway_message(message: Any) -> str:
     """Redact gateway diagnostic free text for operator-owned export.
 
     Single scrub path: everything goes through
-    ``agent.monitoring.redaction.redact_for_export`` (unconditional
-    secrets + PII), then is length-bounded.
+    ``agent.monitoring.redaction.redact_for_export`` (secrets + PII when the
+    global redaction gate is enabled), then is length-bounded.
     """
     try:
         from agent.monitoring.redaction import redact_for_export

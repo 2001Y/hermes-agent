@@ -333,6 +333,12 @@ def _sanitize_tool_target(key: str, value: Any) -> Any:
     bounded = value[:1024]
     if key in _TOOL_INPUT_URL_KEYS:
         try:
+            from agent.redact import redaction_enabled
+            if not redaction_enabled():
+                return bounded
+        except Exception:
+            pass
+        try:
             parsed = urlsplit(bounded)
             if parsed.scheme and parsed.netloc:
                 hostname = parsed.hostname

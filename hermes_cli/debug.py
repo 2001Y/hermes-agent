@@ -394,17 +394,19 @@ def _resolve_log_path(log_name: str) -> Optional[Path]:
 
 
 def _redact_log_text(text: str) -> str:
-    """Run ``redact_sensitive_text`` with ``force=True`` over upload-bound text.
+    """Run the configured redaction pass over upload-bound text.
 
-    Uses ``force=True`` so redaction fires regardless of the operator's
-    ``security.redact_secrets`` setting. The local on-disk log file is
-    not modified; only the in-memory copy headed for the public paste
-    service is sanitized. Returns the redacted text (or the original
-    when empty / non-string).
+    ``force=True`` requests redaction while the global gate is enabled. The
+    explicit ``security.redact_secrets: false`` opt-out also disables the
+    local e-mail pass. The local on-disk log file is not modified; only the
+    in-memory copy headed for the paste service is transformed.
     """
     if not text:
         return text
-    from agent.redact import redact_sensitive_text
+    from agent.redact import redact_sensitive_text, redaction_enabled
+
+    if not redaction_enabled():
+        return text
 
     text = redact_sensitive_text(text, force=True)
     return _EMAIL_ADDRESS_RE.sub("[REDACTED_EMAIL]", text)
