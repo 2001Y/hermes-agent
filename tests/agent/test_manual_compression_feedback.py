@@ -17,7 +17,7 @@ def _messages(count: int) -> list[dict[str, str]]:
 
 
 
-def test_failure_reason_redaction_is_forced_at_ui_boundary(monkeypatch):
+def test_failure_reason_preserves_raw_text_when_redaction_is_disabled(monkeypatch):
     messages = _messages(12)
     fake_secret = "sk-proj-" + "X" * 40
     state = SimpleNamespace(
@@ -30,6 +30,27 @@ def test_failure_reason_redaction_is_forced_at_ui_boundary(monkeypatch):
     feedback = summarize_manual_compression(
         messages,
         list(messages),
+        120_000,
+        120_000,
+        compression_state=state,
+    )
+
+    assert fake_secret in feedback["note"]
+    assert "OPENAI_API_KEY=" in feedback["note"]
+
+
+def test_failure_reason_redacts_text_when_redaction_is_enabled(monkeypatch):
+    fake_secret = "sk-proj-" + "Y" * 40
+    state = SimpleNamespace(
+        _last_compress_aborted=True,
+        _last_summary_fallback_used=False,
+        _last_summary_error=f"provider rejected OPENAI_API_KEY={fake_secret}",
+    )
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", True, raising=False)
+
+    feedback = summarize_manual_compression(
+        _messages(12),
+        _messages(12),
         120_000,
         120_000,
         compression_state=state,

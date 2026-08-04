@@ -272,7 +272,7 @@ async def test_transient_rich_error_does_not_legacy_resend(exc):
 
 
 @pytest.mark.asyncio
-async def test_rich_transport_error_redacts_bot_token_even_when_redaction_disabled(monkeypatch):
+async def test_rich_transport_error_preserves_bot_token_when_redaction_disabled(monkeypatch):
     import agent.redact as redact
 
     monkeypatch.setattr(redact, "_REDACT_ENABLED", False)
@@ -288,13 +288,13 @@ async def test_rich_transport_error_redacts_bot_token_even_when_redaction_disabl
 
     assert result.success is False
     assert result.error is not None
-    assert token not in result.error
-    assert "bot123456789:***/sendRichMessage" in result.error
+    assert token in result.error
+    assert f"bot{token}/sendRichMessage" in result.error
     adapter._bot.send_message.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_legacy_send_error_redacts_bot_token_without_traceback(monkeypatch, caplog):
+async def test_legacy_send_error_preserves_bot_token_when_redaction_disabled(monkeypatch, caplog):
     import agent.redact as redact
 
     monkeypatch.setattr(redact, "_REDACT_ENABLED", False)
@@ -311,10 +311,10 @@ async def test_legacy_send_error_redacts_bot_token_without_traceback(monkeypatch
 
     assert result.success is False
     assert result.error is not None
-    assert token not in result.error
-    assert "bot123456789:***/sendMessage" in result.error
-    assert token not in caplog.text
-    assert "bot123456789:***/sendMessage" in caplog.text
+    assert token in result.error
+    assert f"bot{token}/sendMessage" in result.error
+    assert token in caplog.text
+    assert f"bot{token}/sendMessage" in caplog.text
     adapter._bot.do_api_request.assert_not_called()
 
 
@@ -434,7 +434,7 @@ async def test_finalize_edit_uses_rich_for_table_content():
 
 
 @pytest.mark.asyncio
-async def test_legacy_edit_error_logs_redacted_bot_token_without_traceback(monkeypatch, caplog):
+async def test_legacy_edit_error_preserves_bot_token_when_redaction_disabled(monkeypatch, caplog):
     import agent.redact as redact
 
     monkeypatch.setattr(redact, "_REDACT_ENABLED", False)
@@ -453,10 +453,10 @@ async def test_legacy_edit_error_logs_redacted_bot_token_without_traceback(monke
 
     assert result.success is False
     assert result.error is not None
-    assert token not in result.error
-    assert "bot123456789:***/editMessageText" in result.error
-    assert token not in caplog.text
-    assert "bot123456789:***/editMessageText" in caplog.text
+    assert token in result.error
+    assert f"bot{token}/editMessageText" in result.error
+    assert token in caplog.text
+    assert f"bot{token}/editMessageText" in caplog.text
 
 
 # --------------------------------------------------------------------------

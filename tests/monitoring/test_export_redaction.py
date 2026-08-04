@@ -1,7 +1,9 @@
 """Export redaction tests — the security-critical layer.
 
-Invariants:
-  * One unconditional scrub: secrets AND PII, no modes, no knobs.
+Invariants when ``security.redact_secrets`` is enabled:
+  * One scrub: secrets AND PII, no weaker modes.
+  * The explicit global opt-out is covered by
+    ``tests/agent/test_global_redaction_disable.py``.
   * Fails CLOSED: if the redactor can't run, the raw string is never emitted.
   * Structure (subsystem names, error codes) survives; free-text PII does not.
 """
@@ -13,7 +15,7 @@ from unittest import mock
 import agent.monitoring.redaction as R
 
 
-def test_secret_key_always_stripped():
+def test_secret_key_stripped_when_enabled():
     fake_key = "sk-ant-api03-" + "A" * 24  # constructed to dodge literal-scrubbers
     out = R.redact_for_export(f"calling with key {fake_key} and moving on")
     assert out is not None

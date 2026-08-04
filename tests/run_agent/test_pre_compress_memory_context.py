@@ -112,7 +112,7 @@ def test_legacy_engine_receives_only_supported_compression_arguments():
     assert calls == [100_000]
 
 
-def test_provider_context_is_strictly_sanitized_before_plugin_engine(monkeypatch):
+def test_provider_context_preserves_raw_text_when_redaction_is_disabled(monkeypatch):
     prefix_secret = "sk-" + "a" * 30
     query_secret = "opaque-query-secret"
     userinfo_value = "opaque-userinfo-value"
@@ -149,34 +149,42 @@ def test_provider_context_is_strictly_sanitized_before_plugin_engine(monkeypatch
     _configure_engine_state(compressor)
     agent = _make_agent(manager, compressor)
 
-    # Provider-to-engine handoff is an external-LLM egress boundary, so it
-    # remains strict even when display/log redaction was explicitly disabled.
+    # The process-wide opt-out applies to provider-to-engine handoff too.
     monkeypatch.setattr("agent.redact._REDACT_ENABLED", False)
     agent._compress_context(_messages(), "sys", approx_tokens=100_000)
 
     assert len(received) == 1
     context = received[0]
-    assert prefix_secret not in context
-    assert query_secret not in context
-    assert userinfo_value not in context
-    assert fragment_secret not in context
-    assert relative_secret not in context
-    assert encoded_key_secret not in context
-    assert hyphen_client_secret not in context
-    assert hyphen_access_secret not in context
-    assert hyphen_api_secret not in context
-    assert encoded_hyphen_secret not in context
-    assert network_userinfo_secret not in context
-    assert "access_token=***" in context
-    assert "https://user:***@example.test/private" in context
-    assert "https://x.test/#access_token=***&view=public" in context
-    assert "/resume?token=***&view=public" in context
-    assert "client%5Fsecret=***&view=public" in context
-    assert "client-secret=***&view=public" in context
-    assert "Access-Token=***&view=public" in context
-    assert "api-key=***&view=public" in context
-    assert "client%2Dsecret=***&view=public" in context
-    assert "//user:***@x.test/path" in context
+    assert prefix_secret in context
+    assert query_secret in context
+    assert userinfo_value in context
+    assert fragment_secret in context
+    assert relative_secret in context
+    assert encoded_key_secret in context
+    assert hyphen_client_secret in context
+    assert hyphen_access_secret in context
+    assert hyphen_api_secret in context
+    assert encoded_hyphen_secret in context
+    assert network_userinfo_secret in context
+
+    # The default-enabled path still sanitizes the same handoff.
+    monkeypatch.setattr("agent.redact._REDACT_ENABLED", True)
+    agent._compress_context(_messages(), "sys", approx_tokens=100_000)
+    strict_context = received[-1]
+    for secret in (
+        prefix_secret,
+        query_secret,
+        userinfo_value,
+        fragment_secret,
+        relative_secret,
+        encoded_key_secret,
+        hyphen_client_secret,
+        hyphen_access_secret,
+        hyphen_api_secret,
+        encoded_hyphen_secret,
+        network_userinfo_secret,
+    ):
+        assert secret not in strict_context
 
 
 def test_provider_context_is_bounded_before_plugin_engine():
