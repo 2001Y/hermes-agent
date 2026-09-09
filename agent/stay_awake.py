@@ -20,6 +20,8 @@ from __future__ import annotations
 import logging
 import platform
 import subprocess
+import threading
+from contextlib import contextmanager
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -123,3 +125,51 @@ class StayAwake:
         ES_CONTINUOUS = 0x80000000
         ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
         self._original_state = None
+
+
+# ── Process-wide refcounted scope ────────────────────────────────────────────
+# One OS inhibitor per process, shared by concurrent turns (gateway sessions,
+# subagent children): the first active turn starts it, the last one stops it.
+# Refcounting matters because Windows SetThreadExecutionState is not nestable —
+# a second StayAwake exiting would clear the first one's flags.
+
+_lock = threading.Lock()
+_count = 0
+_inhibitor: Optional[StayAwake] = None
+
+
+def _config_enabled() -> bool:
+    """``agent.stay_awake`` from config.yaml (default False)."""
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        return bool((load_config_readonly().get("agent", {}) or {}).get("stay_awake", False))
+    except Exception:
+        return False
+
+
+@contextmanager
+def turn_scope(enabled: Optional[bool] = None):
+    """Hold the shared stay-awake inhibitor for the duration of one agent turn.
+
+    ``enabled=None`` reads ``agent.stay_awake`` from config; the whole scope is a
+    no-op when disabled. Re-entrant across threads via refcount.
+    """
+    global _count, _inhibitor
+    active = _config_enabled() if enabled is None else enabled
+    if not active:
+        yield
+        return
+    with _lock:
+        _count += 1
+        if _count == 1:
+            _inhibitor = StayAwake(enabled=True)
+            _inhibitor.__enter__()
+    try:
+        yield
+    finally:
+        with _lock:
+            _count -= 1
+            if _count == 0 and _inhibitor is not None:
+                _inhibitor.__exit__(None, None, None)
+                _inhibitor = None
