@@ -1079,14 +1079,15 @@ agent:
 ```
 
 The default `idle` mode uses the OS-native, unprivileged turn-scoped inhibitor:
-`caffeinate -i` (macOS), `systemd-inhibit` (Linux), or
-`SetThreadExecutionState` (Windows). Display sleep may still occur. The
-inhibitor is shared by concurrent turns and released when the last turn exits,
-including error and interrupt paths.
+`/usr/bin/caffeinate -i -w <Hermes PID>` (macOS), `systemd-inhibit`
+(Linux), or `SetThreadExecutionState` (Windows). Display sleep may still occur.
+The inhibitor is shared by concurrent turns and released when the last turn exits,
+including error and interrupt paths. The macOS `-w` binding also releases the
+assertion when Hermes is killed unexpectedly.
 
 On macOS, `closed-display` additionally uses the system-wide PowerManagement
-`pmset -a disablesleep` setting, the same mechanism used by Amphetamine's
-Power Protect. It is opt-in because it requires a one-time, narrowly scoped
+`pmset -a disablesleep` setting. Hermes invokes this macOS system command directly;
+Amphetamine is not installed or required. It is opt-in because it requires a one-time,
 passwordless sudo rule for exactly these two commands:
 
 ```text
@@ -1102,12 +1103,24 @@ Cmnd_Alias PMSET_HERMES_POWER = /usr/bin/pmset -a disablesleep 1, /usr/bin/pmset
 %admin ALL=(ALL) NOPASSWD: PMSET_HERMES_POWER
 ```
 
-Hermes never asks for a sudo password from inside an agent turn. If the rule is
-not installed or the command fails, Hermes logs the limitation and falls back
-to idle-only protection rather than blocking the turn on an interactive prompt.
-Because `pmset` is a persistent system-wide setting, Hermes snapshots the
-pre-turn value and restores it when the last in-process turn exits. A forced
-power loss or OS crash cannot run cleanup; verify `pmset -g` after recovery.
+Hermes never asks for a sudo password from inside an agent turn. To install the
+Hermes-specific rule with the native macOS administrator prompt, run this once
+in an interactive session:
+
+```bash
+hermes setup power
+```
+
+The Desktop app exposes the same setup from Settings → Advanced; enabling the
+closed-display toggle opens the native macOS administrator prompt. The toggle is
+unavailable on other operating systems.
+
+If the rule is not installed or the command fails, Hermes logs the limitation and falls back to idle-only
+protection rather than blocking the turn on an interactive prompt. Hermes records ownership and the previous
+value in a user-only state journal. On the next Hermes startup,
+any dead owner is removed; if no live Hermes owner remains, the previous value is restored. A warning is
+shown to the active driver. Hermes never changes an unknown `SleepDisabled=1` value that has no Hermes
+ownership record.
 
 The closed-display mode is intended for macOS hardware that supports the
 requested clamshell behavior. It does not keep the display lit, and it does not

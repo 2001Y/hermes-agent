@@ -109,3 +109,17 @@ def test_closed_display_never_prompts_and_falls_back_to_idle(monkeypatch):
 
 def test_invalid_mode_normalizes_to_idle():
     assert StayAwake(enabled=True, mode="unknown")._mode == "idle"
+
+
+def test_stale_recovery_is_mac_only(monkeypatch):
+    monkeypatch.setattr(stay_awake.platform, "system", lambda: "Linux")
+    assert stay_awake.recover_stale_power_protect_if_needed() == (False, None)
+
+
+def test_stale_recovery_returns_a_user_notice(monkeypatch):
+    monkeypatch.setattr(stay_awake.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(stay_awake, "recover_stale_power_protect", lambda *_args: True)
+    recovered, message = stay_awake.recover_stale_power_protect_if_needed()
+    assert recovered is True
+    assert message is not None
+    assert "stale Power Protect" in message

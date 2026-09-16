@@ -28,6 +28,8 @@ import threading
 from contextlib import contextmanager
 from typing import Iterator, Optional
 
+from agent.power_protect import PowerProtectLease, recover_stale_power_protect
+
 logger = logging.getLogger(__name__)
 
 _PMSET = "/usr/bin/pmset"
@@ -49,8 +51,7 @@ class StayAwake:
         self._mode = _normalize_mode(mode)
         self._process: Optional[subprocess.Popen] = None
         self._original_state = None  # Windows: previous ES_* flags
-        self._sleep_disabled_before: Optional[int] = None
-        self._sleep_disabled_owned = False
+        self._power_protect: Optional[PowerProtectLease] = None
 
     # ── Context manager ──────────────────────────────────────────────────
 
@@ -68,8 +69,14 @@ class StayAwake:
                 self._start_linux()
             elif system == "Windows":
                 self._start_windows()
-            if self._process is not None or self._original_state is not None or self._sleep_disabled_owned:
-                logger.info("Stay-awake inhibitor started (os=%s, mode=%s)", system, self._mode)
+            if (
+                self._process is not None
+                or self._original_state is not None
+                or self._power_protect is not None
+            ):
+                logger.info(
+                    "Stay-awake inhibitor started (os=%s, mode=%s)", system, self._mode
+                )
         except Exception as exc:
             logger.warning("Failed to start stay-awake inhibitor: %s", exc)
         return self
@@ -78,7 +85,7 @@ class StayAwake:
         if not self._enabled:
             return
         try:
-            if self._sleep_disabled_owned:
+            if self._power_protect is not None:
                 self._stop_macos_closed_display()
             if self._process is not None:
                 self._process.terminate()
@@ -104,22 +111,10 @@ class StayAwake:
         )
 
     def _start_macos_closed_display(self) -> None:
-        """Use macOS PowerManagement to keep a closed display session awake.
-
-        ``pmset disablesleep`` is a persistent system-wide setting rather than
-        a process assertion.  Snapshot the existing value, change it only when
-        this scope owns the change, and restore it on exit.  The command is
-        deliberately non-interactive: a turn must never hang waiting for a
-        password or a TTY.  If the one-time NOPASSWD setup is absent, retain
-        the useful idle-only inhibitor and make the loss of closed-display
-        coverage explicit in the log.
-        """
+        """Use macOS PowerManagement with crash-aware Hermes ownership."""
+        lease = PowerProtectLease(_read_sleep_disabled, _set_sleep_disabled)
         try:
-            before = _read_sleep_disabled()
-            if before == 1:
-                logger.info("macOS closed-display sleep prevention already active")
-                return
-            _set_sleep_disabled(1)
+            lease.acquire()
         except Exception as exc:
             logger.warning(
                 "Closed-display sleep prevention is unavailable; falling back to idle-only "
@@ -128,31 +123,24 @@ class StayAwake:
             )
             self._start_macos()
             return
-        self._sleep_disabled_before = before
-        self._sleep_disabled_owned = True
+        self._power_protect = lease
+        if lease.recovered_stale:
+            logger.warning(
+                "Hermes recovered stale Power Protect ownership from an interrupted previous run "
+                "before starting this turn"
+            )
 
     def _stop_macos_closed_display(self) -> None:
-        """Restore the value observed before this scope changed PowerManagement."""
-        before = self._sleep_disabled_before
-        self._sleep_disabled_before = None
-        self._sleep_disabled_owned = False
-        if before is None:
+        """Release this process's lease and restore state when it is the last owner."""
+        lease = self._power_protect
+        self._power_protect = None
+        if lease is None:
             return
         try:
-            current = _read_sleep_disabled()
-            if current == 1:
-                _set_sleep_disabled(before)
-            elif current != before:
-                logger.warning(
-                    "Leaving macOS SleepDisabled=%s unchanged; it changed externally during "
-                    "the Hermes turn (original=%s)",
-                    current,
-                    before,
-                )
+            lease.release()
         except Exception as exc:
             logger.warning(
-                "Could not restore macOS SleepDisabled=%s after the Hermes turn: %s",
-                before,
+                "Could not release Hermes Power Protect after the turn: %s",
                 _describe_subprocess_error(exc),
             )
 
@@ -257,7 +245,9 @@ def _config_enabled() -> bool:
     try:
         from hermes_cli.config import load_config_readonly
 
-        return bool((load_config_readonly().get("agent", {}) or {}).get("stay_awake", False))
+        return bool(
+            (load_config_readonly().get("agent", {}) or {}).get("stay_awake", False)
+        )
     except Exception:
         return False
 
@@ -271,6 +261,36 @@ def _config_mode() -> str:
         return _normalize_mode(agent_config.get("stay_awake_mode", "idle"))
     except Exception:
         return "idle"
+
+
+def recover_stale_power_protect_if_needed() -> tuple[bool, str | None]:
+    """Repair a stale Hermes-owned macOS lease before admitting a new turn.
+
+    Returns ``(recovered, error_message)``. An unknown or absent ownership file is
+    never treated as a reason to change the system-wide setting.
+    """
+    if platform.system() != "Darwin":
+        return False, None
+    try:
+        recovered = recover_stale_power_protect(
+            _read_sleep_disabled, _set_sleep_disabled
+        )
+    except Exception as exc:
+        message = (
+            "Hermes found stale Power Protect state from a previous run but could not "
+            "restore it. Check `pmset -g` and the Hermes Power Protect setup."
+        )
+        logger.warning("%s: %s", message, _describe_subprocess_error(exc))
+        return False, message
+    if recovered:
+        message = (
+            "The previous Hermes run ended unexpectedly; stale Power Protect ownership was "
+            "cleaned up. Any active Hermes owner remains protected, and the prior SleepDisabled "
+            "state will be restored when the last owner exits."
+        )
+        logger.warning(message)
+        return True, message
+    return False, None
 
 
 @contextmanager

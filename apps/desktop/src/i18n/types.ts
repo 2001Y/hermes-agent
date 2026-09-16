@@ -823,6 +823,10 @@ export interface Translations {
       toolsetsWipeConfirm: string
       keepAwakeTitle: string
       keepAwakeDesc: string
+      closedDisplayTitle: string
+      closedDisplayDesc: string
+      closedDisplaySetupUnavailable: string
+      closedDisplaySetupFailed: string
       disableF12Title: string
       disableF12Desc: string
       attachmentSizeTitle: string
