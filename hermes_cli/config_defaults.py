@@ -243,6 +243,10 @@ DEFAULT_CONFIG = {
         # Display sleep is untouched; no-op where the inhibitor is unavailable
         # (containers, headless servers). Applies to every surface that runs turns.
         "stay_awake": False,
+        # macOS-only optional stronger backend. "idle" is unprivileged and portable;
+        # "closed-display" uses pmset disablesleep and requires a one-time narrowly
+        # scoped NOPASSWD sudoers rule. Invalid values fall back to "idle".
+        "stay_awake_mode": "idle",
         "disabled_toolsets": [],
         # Model name (any reasonable spelling) -> effort level; overrides agent.reasoning_effort
         # when the current model matches. Edit in config.yaml (no CLI support: dots in keys).

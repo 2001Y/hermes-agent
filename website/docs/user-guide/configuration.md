@@ -1074,14 +1074,45 @@ call and halts tool execution):
 
 ```yaml
 agent:
-  stay_awake: true   # default: false
+  stay_awake: true       # default: false
+  stay_awake_mode: idle  # idle (default) | closed-display (macOS)
 ```
 
-Only system/idle sleep is inhibited; the display may still dim. Implementations:
-`caffeinate -i` (macOS), `systemd-inhibit` (Linux), `SetThreadExecutionState`
-(Windows). Where no inhibitor is available (containers, headless servers,
-non-systemd distros) the setting degrades to a no-op. Applies to every surface
-that runs agent turns (CLI, gateway, TUI, Desktop, cron, subagents).
+The default `idle` mode uses the OS-native, unprivileged turn-scoped inhibitor:
+`caffeinate -i` (macOS), `systemd-inhibit` (Linux), or
+`SetThreadExecutionState` (Windows). Display sleep may still occur. The
+inhibitor is shared by concurrent turns and released when the last turn exits,
+including error and interrupt paths.
+
+On macOS, `closed-display` additionally uses the system-wide PowerManagement
+`pmset -a disablesleep` setting, the same mechanism used by Amphetamine's
+Power Protect. It is opt-in because it requires a one-time, narrowly scoped
+passwordless sudo rule for exactly these two commands:
+
+```text
+/usr/bin/pmset -a disablesleep 1
+/usr/bin/pmset -a disablesleep 0
+```
+
+An administrator can provision the allowlist as `/etc/sudoers.d/hermes-power-protect`
+using `visudo`:
+
+```sudoers
+Cmnd_Alias PMSET_HERMES_POWER = /usr/bin/pmset -a disablesleep 1, /usr/bin/pmset -a disablesleep 0
+%admin ALL=(ALL) NOPASSWD: PMSET_HERMES_POWER
+```
+
+Hermes never asks for a sudo password from inside an agent turn. If the rule is
+not installed or the command fails, Hermes logs the limitation and falls back
+to idle-only protection rather than blocking the turn on an interactive prompt.
+Because `pmset` is a persistent system-wide setting, Hermes snapshots the
+pre-turn value and restores it when the last in-process turn exits. A forced
+power loss or OS crash cannot run cleanup; verify `pmset -g` after recovery.
+
+The closed-display mode is intended for macOS hardware that supports the
+requested clamshell behavior. It does not keep the display lit, and it does not
+claim to override firmware, thermal, or other hardware-enforced sleep paths.
+
 
 ## Gateway Turn Lease Timeout
 
