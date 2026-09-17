@@ -5,6 +5,7 @@ import { $paneDistributionMode } from '@/store/pane-distribution'
 
 import { group, split } from './model'
 import {
+  $collapsedTreeSides,
   $dismissedPanes,
   $hiddenTreePanes,
   $layoutTree,
@@ -23,6 +24,7 @@ function registerPane(id: string, data: Record<string, unknown>) {
 beforeEach(() => {
   window.localStorage.clear()
   $paneDistributionMode.set('equal-flex')
+  $collapsedTreeSides.set(new Set())
   $dismissedPanes.set(new Set())
   $hiddenTreePanes.set(new Set())
   $userPlacedPanes.set(new Set())
@@ -32,11 +34,14 @@ beforeEach(() => {
   registerPane('left', { placement: 'main' })
   registerPane('right', { placement: 'main' })
   registerPane('new', { placement: 'right' })
+  registerPane('collapsed-a', { placement: 'right' })
+  registerPane('collapsed-b', { placement: 'right' })
 })
 
 afterEach(() => {
   disposers.splice(0).forEach(dispose => dispose())
   $layoutTree.set(null)
+  $collapsedTreeSides.set(new Set())
 })
 
 describe('structural pane distribution', () => {
@@ -112,5 +117,29 @@ describe('structural pane distribution', () => {
     expect(tree.children).toHaveLength(3)
     expect(tree.weights[0]).toBeCloseTo(tree.weights[1])
     expect(tree.weights[1]).toBeCloseTo(tree.weights[2])
+  })
+
+  test('does not redistribute tracks on a collapsed root side', () => {
+    for (const mode of ['equal-flex', 'equal-all'] as const) {
+      $paneDistributionMode.set(mode)
+      $collapsedTreeSides.set(new Set(['right']))
+
+      const tree = split(
+        'row',
+        [
+          group(['main'], { id: 'main-zone' }),
+          group(['collapsed-a'], { id: 'collapsed-a-zone' }),
+          group(['collapsed-b'], { id: 'collapsed-b-zone' })
+        ],
+        [1, 4, 7],
+        `collapsed-${mode}`
+      )
+
+      $layoutTree.set(tree)
+      equalizeCurrentPaneTree()
+
+      expect($layoutTree.get()).toBe(tree)
+      expect(tree.weights).toEqual([1, 4, 7])
+    }
   })
 })

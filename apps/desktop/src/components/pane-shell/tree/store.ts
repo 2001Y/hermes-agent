@@ -869,11 +869,9 @@ export function removeTreePane(paneId: string) {
 
 /** The layout's root ROW — the split that contains main + the side columns.
  *  Usually the root itself (Default, Focus); in a column-root layout (Terminal
- *  deck, Quad) it's the row child that holds sessions/workspace/files. Returns
- *  null when the tree has no row split with side-eligible panes. */
-function rootRow(): SplitNode | null {
-  const tree = $layoutTree.get()
-
+ *  deck, Quad) it's the row child that holds sessions/workspace/files.
+ *  Returns null when the tree has no row split with side-eligible panes. */
+function rootRowFor(tree: LayoutNode | null): SplitNode | null {
   if (!tree || tree.type !== 'split') {
     return null
   }
@@ -902,11 +900,15 @@ function rootRow(): SplitNode | null {
   )
 }
 
+function rootRow(): SplitNode | null {
+  return rootRowFor($layoutTree.get())
+}
+
 /** Which root-row side a pane currently lives in, or null when it's nested
  *  with main (dragged into the middle) — where a side collapse can't hide it.
  *  Lets side-bound closers (files/sessions) fall back to dismissal. */
-export function paneRootSide(paneId: string): null | TreeSide {
-  const row = rootRow()
+function paneRootSideInTree(tree: LayoutNode | null, paneId: string): null | TreeSide {
+  const row = rootRowFor(tree)
 
   if (!row) {
     return null
@@ -930,6 +932,10 @@ export function paneRootSide(paneId: string): null | TreeSide {
   }
 
   return index < mainIndices[0] ? 'left' : index > mainIndices[mainIndices.length - 1] ? 'right' : null
+}
+
+export function paneRootSide(paneId: string): null | TreeSide {
+  return paneRootSideInTree($layoutTree.get(), paneId)
 }
 
 /** The closer-less Close: dismiss the pane (removed + remembered; reveal
@@ -1279,18 +1285,26 @@ function changedSplitIds(before: LayoutNode, after: LayoutNode): Set<string> {
   return changed
 }
 
-function distributionContext(mode: PaneDistributionMode): TrackContext {
+function distributionContext(mode: PaneDistributionMode, tree: LayoutNode): TrackContext {
   const panes = registry.getArea('panes')
   const paneFor = (id: string) => panes.find(pane => pane.id === id)
   const hidden = $hiddenTreePanes.get()
   const dismissed = $dismissedPanes.get()
   const narrow = $narrowViewport.get()
+  const collapsedSides = $collapsedTreeSides.get()
 
   const paneGone = (id: string) => {
     const contribution = paneFor(id)
     const data = contribution?.data as { collapsible?: boolean } | undefined
+    const side = paneRootSideInTree(tree, id)
 
-    return !contribution || hidden.has(id) || dismissed.has(id) || (narrow && Boolean(data?.collapsible))
+    return (
+      !contribution ||
+      hidden.has(id) ||
+      dismissed.has(id) ||
+      (narrow && Boolean(data?.collapsible)) ||
+      (side !== null && collapsedSides.has(side))
+    )
   }
 
   return {
@@ -1318,7 +1332,7 @@ function distributionCandidates(
     return candidates
   }
 
-  const ctx = distributionContext(mode)
+  const ctx = distributionContext(mode, root)
 
   const visit = (node: LayoutNode) => {
     if (node.type === 'group') {
