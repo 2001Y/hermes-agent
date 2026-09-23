@@ -3703,6 +3703,14 @@ class GatewayRunner(
         self._session_db_handle_cache = RecoverableHandleCache(
             handles=self._session_db_handles, lock=self._session_db_handles_lock)
         try:
+            # Run page-only auto-compaction before opening the first handle for this profile.  This is
+            # deliberately separate from the retention sweep below: compacting a live SQLite inode
+            # underneath SessionDB would invalidate its WAL generation.
+            from hermes_state_autocompact import maybe_auto_compact_from_config
+            maybe_auto_compact_from_config()
+        except Exception:
+            logger.debug("state.db auto-compaction preflight skipped", exc_info=True)
+        try:
             self._open_session_db_for_active_scope(raise_on_error=True)
         except Exception as e:
             # WARNING (not DEBUG) so it lands in errors.log; else an NFS HERMES_HOME silently loses /resume etc.
@@ -4707,6 +4715,11 @@ def _housekeeping_state_db_maintenance(launch: Optional[Tuple[Path, Path]] = Non
     from hermes_cli.config import load_config as _load_full_config
     from hermes_state_registry import acquire, release_or_close
     _sess_cfg = (_load_full_config().get("sessions") or {})
+    # Secondary multiplexed profiles may not have a live handle yet. Give the non-destructive
+    # compactor that same pre-open opportunity; the launch profile's already-open handle fails
+    # closed and waits for its next gateway restart.
+    from hermes_state_autocompact import maybe_auto_compact_from_config
+    maybe_auto_compact_from_config()
     if not (_sess_cfg.get("auto_archive", False) or _sess_cfg.get("auto_prune", False)):
         return
     _adb = acquire()

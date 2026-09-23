@@ -106,7 +106,8 @@ def _render_state_db_stats(stats: dict, holders=None, host_note: str = "") -> li
     # Oversized DB: suggest auto_prune, plus the offline optimize-storage pass when the FTS rebuild is
     # pending OR the DB predates the current trigram layout (fts_storage_version < FTS_STORAGE_VERSION).
     if logical is not None and logical > STATE_DB_SIZE_WARN_BYTES:
-        detail = "consider enabling sessions.auto_prune in config.yaml to bound growth"
+        detail = ("consider enabling sessions.auto_prune in config.yaml to bound growth, or "
+                  "sessions.auto_compact.enabled to reclaim pages without deleting history")
         stale_trigram = (fts is not None and fts.get("messages_fts_trigram")
                          and (stats.get("fts_storage_version") or 0) < FTS_STORAGE_VERSION)
         if stats.get("fts_rebuild_pending") or stale_trigram:

@@ -2227,6 +2227,17 @@ DEFAULT_CONFIG = {
         # are never deleted; stale automation sessions whose process died are *closed*, then get a
         # full retention window before removal.
         "auto_prune": True,
+        # Non-destructive page compaction. This never deletes sessions/messages and is opt-in because a
+        # full SQLite rewrite can be expensive. It runs before a DB is opened, only when the free-page
+        # ratio and interval gates pass. external_storage may be {type: local, path: /Volumes/...} or
+        # {type: ssh, host: alias, remote_dir: /absolute/path}; the target is scratch/backup storage,
+        # never a live SQLite filesystem.
+        "auto_compact": {
+            "enabled": False,
+            "min_interval_days": 30,
+            "min_freelist_ratio": 0.25,
+            "external_storage": None,
+        },
         # Inactive days of ended-session history to keep (= `hermes sessions prune`).
         # When true, prune ENDED sessions inactive for retention_days once per (roughly) min_interval_hours
         # at CLI/gateway/cron startup. Activity is the freshest of live activity (last_activity_at) / latest

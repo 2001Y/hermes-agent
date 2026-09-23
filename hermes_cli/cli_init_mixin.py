@@ -319,6 +319,14 @@ class CLIInitMixin:
         self._session_db = None
         self._session_db_unavailable = False
         try:
+            # Full-file compaction must happen before this process opens a SessionDB.  The compactor
+            # holds an exclusive SQLite guard through promotion; running it after acquire() would leave
+            # this process with a live connection while the file is being rewritten.
+            from hermes_state_autocompact import maybe_auto_compact_from_config
+            maybe_auto_compact_from_config()
+        except Exception:
+            logger.debug("state.db auto-compaction preflight skipped", exc_info=True)
+        try:
             # Registry handle, not a bare SessionDB(): goals/loops/heartbeat acquire the same
             # path a moment later from the REPL thread, and a second writer repeats the full
             # open (the /proc-wide deleted-WAL scan, ~4k readlinks) while the render thread

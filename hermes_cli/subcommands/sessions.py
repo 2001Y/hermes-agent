@@ -163,6 +163,14 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     _flag(sessions_optimize_storage, "--force",
         help="Run even while another Hermes process (gateway, Desktop, dashboard, cron) holds state.db — rewriting the store under a live writer can leave every agent refusing turns until all writers are stopped")
 
+    sessions_auto_compact = sessions_subparsers.add_parser(
+        "auto-compact", help="Compact state.db without deleting session history",
+        description="Run the configured non-destructive automatic compaction pass. The database is "
+                    "opened only after the pass, and an optional local or SSH scratch target may be "
+                    "configured under sessions.auto_compact.external_storage.")
+    _flag(sessions_auto_compact, "--force",
+        help="Ignore the interval and free-page thresholds; still refuses while another process holds state.db")
+
     sessions_repair = sessions_subparsers.add_parser(
         "repair", help="Repair a malformed state.db schema so hidden sessions reappear",
         description="Recover a state.db whose schema is malformed (e.g. 'table "

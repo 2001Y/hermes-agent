@@ -976,10 +976,29 @@ def _cmd_set_journal_mode(args):
     return cmd_set_journal_mode(args)
 
 
+def _cmd_auto_compact(args):
+    from hermes_state_autocompact import maybe_auto_compact_from_config
+
+    result = maybe_auto_compact_from_config(force=bool(getattr(args, "force", False)))
+    if result.get("compacted"):
+        before = result.get("before_bytes") or 0
+        after = result.get("after_bytes") or 0
+        print(
+            "✓ Compacted state.db without deleting session history: "
+            f"{before / (1024 * 1024):.1f} MB -> {after / (1024 * 1024):.1f} MB"
+        )
+    elif result.get("skipped"):
+        print(f"Compaction skipped: {result.get('reason') or 'unknown reason'}")
+    else:
+        print("Compaction did not run.")
+    return 1 if str(result.get("reason", "")).startswith("failed:") else None
+
+
 _PRE_DB_HANDLERS = {
     "repair": _cmd_repair, "recover": _cmd_recover, "import": _cmd_import,
     "repair-profiles": _cmd_repair_profiles,  # opens every profile's store itself
     "set-journal-mode": _cmd_set_journal_mode,  # offline: must not open the store it converts
+    "auto-compact": _cmd_auto_compact,  # offline: compaction must run before a SessionDB is opened
 }
 _OBSERVATIONAL_DB_ACTIONS = frozenset({"list", "stats", "pinned"})
 _DB_HANDLERS = {

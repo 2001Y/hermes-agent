@@ -16,6 +16,9 @@ def test_default_config_auto_prune_on_with_90_day_retention():
     assert sessions["auto_prune"] is True
     assert sessions["retention_days"] == 90
     assert sessions["vacuum_after_prune"] is True
+    assert sessions["auto_compact"]["enabled"] is False
+    assert sessions["auto_compact"]["min_interval_days"] == 30
+    assert sessions["auto_compact"]["min_freelist_ratio"] == 0.25
 
 
 def test_fresh_config_runs_auto_prune_at_startup(monkeypatch, tmp_path: Path):
