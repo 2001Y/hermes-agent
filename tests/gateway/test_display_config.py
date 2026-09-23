@@ -319,6 +319,30 @@ class TestToolProgressGrouping:
             == "separate"
         )
 
+    def test_latest_is_supported(self):
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"tool_progress_grouping": "latest"}}
+        assert (
+            resolve_display_setting(config, "slack", "tool_progress_grouping")
+            == "latest"
+        )
+
+    def test_latest_replaces_previous_progress_line(self):
+        from gateway.display_config import update_tool_progress_lines
+
+        lines = update_tool_progress_lines([], "first", "latest")
+        lines = update_tool_progress_lines(lines, "second", "latest")
+
+        assert lines == ["second"]
+
+    def test_accumulate_keeps_progress_history(self):
+        from gateway.display_config import update_tool_progress_lines
+
+        lines = update_tool_progress_lines(["first"], "second", "accumulate")
+
+        assert lines == ["first", "second"]
+
 
 class TestReasoningStyle:
     """Per-platform reasoning render style (code | blockquote | subtext)."""
@@ -344,5 +368,4 @@ class TestLiveStatusSetting:
         from gateway.display_config import resolve_display_setting
 
         assert resolve_display_setting({}, "slack", "live_status") == "full"
-
 

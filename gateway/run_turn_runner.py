@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from agent.interrupt_compat import _accepts_keyword
 from agent.replay_cleanup import canonicalize_replay_history
 from gateway.config import Platform
+from gateway.display_config import update_tool_progress_lines
 from gateway.media_repair import repair_explicit_computer_use_media_paths
 from gateway.platforms.base import BasePlatformAdapter
 from gateway.turn_context import TurnContext
@@ -641,10 +642,21 @@ class TurnRunner:
         if isinstance(raw, tuple) and len(raw) == 3 and raw[0] == "__dedup__":
             _, base_msg, count = raw
             if not st.progress_lines:
+                st.progress_lines = update_tool_progress_lines(
+                    st.progress_lines, base_msg, self._ctx.progress_grouping,
+                )
                 return base_msg
-            st.progress_lines[-1] = f"{base_msg} (×{count + 1})"
+            dedup_message = f"{base_msg} (×{count + 1})"
+            if self._ctx.progress_grouping == "latest":
+                st.progress_lines = update_tool_progress_lines(
+                    st.progress_lines, dedup_message, self._ctx.progress_grouping,
+                )
+            else:
+                st.progress_lines[-1] = dedup_message
             return st.progress_lines[-1]
-        st.progress_lines.append(raw)
+        st.progress_lines = update_tool_progress_lines(
+            st.progress_lines, raw, self._ctx.progress_grouping,
+        )
         return raw
 
     async def _flush_progress_edit(self, st) -> None:

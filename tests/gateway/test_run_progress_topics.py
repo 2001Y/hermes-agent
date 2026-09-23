@@ -60,6 +60,19 @@ class ProgressCaptureAdapter(BasePlatformAdapter):
         return {"id": chat_id}
 
 
+def test_latest_grouping_replaces_progress_history_in_current_turn_runner():
+    from gateway.run_turn_runner import TurnRunner
+
+    runner = object.__new__(TurnRunner)
+    runner._ctx = SimpleNamespace(progress_grouping="latest")
+    state = SimpleNamespace(progress_lines=[])
+
+    runner._progress_absorb(state, "first")
+    runner._progress_absorb(state, "second")
+
+    assert state.progress_lines == ["second"]
+
+
 class DiscordProgressCaptureAdapter(ProgressCaptureAdapter):
     """Capture sends while exercising Discord's real preview formatter."""
 
