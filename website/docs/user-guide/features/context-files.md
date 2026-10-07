@@ -14,8 +14,8 @@ Hermes Agent loads configured shared files and automatically discovers project c
 |------|---------|-----------| 
 | **Configured external files** | Shared instructions across projects | `context.external_files`, in declared order |
 | **.hermes.md** / **HERMES.md** | Project instructions (highest priority) | Walks to git root |
-| **AGENTS.override.md** | Personal, per-directory override of AGENTS.md (typically gitignored) | CWD at startup + subdirectories progressively |
-| **AGENTS.md** | Project instructions, conventions, architecture | CWD at startup + subdirectories progressively |
+| **AGENTS.override.md** | Personal, per-directory override of AGENTS.md (typically gitignored) | Git root to CWD at startup + subdirectories progressively |
+| **AGENTS.md** | Project instructions, conventions, architecture | Git root to CWD at startup + subdirectories progressively |
 | **CLAUDE.md** | Claude Code context files (also detected) | CWD at startup + subdirectories progressively |
 | **SOUL.md** | Global personality and tone customization for this Hermes instance | `HERMES_HOME/SOUL.md` only |
 | **.cursorrules** | Cursor IDE coding conventions | CWD only |
@@ -94,7 +94,7 @@ Outside a git repository, only the working directory itself is checked — paren
 
 ### Progressive Subdirectory Discovery
 
-At session start, Hermes loads the `AGENTS.md` from your working directory into the system prompt. As the agent navigates into subdirectories during the session (via `read_file`, `terminal`, `search_files`, etc.), it **progressively discovers** context files in those directories and injects them into the conversation at the moment they become relevant.
+At session start, Hermes loads the `AGENTS.md` chain from the git root to your working directory into the system prompt, preferring `AGENTS.override.md` in each directory. Outside a git repository, only the working directory is checked. As the agent navigates into subdirectories during the session (via `read_file`, `terminal`, `search_files`, etc.), it **progressively discovers** context files in those directories and injects them into the conversation at the moment they become relevant.
 
 ```
 my-project/

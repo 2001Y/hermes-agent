@@ -14,14 +14,15 @@ Hermes Agent 会加载配置的共享文件，并自动发现项目上下文文�
 |------|---------|-----------| 
 | **配置的外部文件** | 跨项目共享的指令 | 按 `context.external_files` 声明的顺序加载 |
 | **.hermes.md** / **HERMES.md** | 项目指令（最高优先级） | 向上遍历至 git 根目录 |
-| **AGENTS.md** | 项目指令、规范、架构说明 | 启动时的 CWD 及子目录（渐进式） |
+| **AGENTS.override.md** | 每个目录中 AGENTS.md 的个人覆盖文件（通常被 git 忽略） | 启动时从 git 根目录到 CWD，子目录渐进式发现 |
+| **AGENTS.md** | 项目指令、规范、架构说明 | 启动时从 git 根目录到 CWD，子目录渐进式发现 |
 | **CLAUDE.md** | Claude Code 上下文文件（同样支持检测） | 启动时的 CWD 及子目录（渐进式） |
 | **SOUL.md** | 当前 Hermes 实例的全局个性与语气定制 | 仅 `HERMES_HOME/SOUL.md` |
 | **.cursorrules** | Cursor IDE 编码规范 | 仅 CWD |
 | **.cursor/rules/*.mdc** | Cursor IDE 规则模块 | 仅 CWD |
 
 :::info 优先级系统
-配置的外部文件会额外加载在项目上下文之前。每次会话仅加载**一种**项目上下文类型（先匹配先生效）：`.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`。**SOUL.md** 始终作为 agent 身份独立加载（插槽 #1）。
+配置的外部文件会额外加载在项目上下文之前。每次会话仅加载**一种**项目上下文类型（先匹配先生效）：`.hermes.md` → `AGENTS.override.md` / `AGENTS.md` → `CLAUDE.md` → `.cursorrules`。**SOUL.md** 始终作为 agent 身份独立加载（插槽 #1）。
 :::
 
 ## 配置外部上下文文件 {#configured-external-context-files}
@@ -67,7 +68,7 @@ hermes config set context.external_files '["~/rules,team.md", "~/other.md"]'
 
 ### 渐进式子目录发现
 
-会话启动时，Hermes 将工作目录中的 `AGENTS.md` 加载到系统 prompt（提示词）中。在会话期间，当 agent 通过 `read_file`、`terminal`、`search_files` 等工具导航进入子目录时，它会**渐进式发现**这些目录中的上下文文件，并在其变得相关的时刻将其注入对话。
+会话启动时，Hermes 将从 git 根目录到工作目录的 `AGENTS.md` 加载链加入系统 prompt（提示词），每个目录优先使用 `AGENTS.override.md`。不在 git 仓库中时，仅检查工作目录。在会话期间，当 agent 通过 `read_file`、`terminal`、`search_files` 等工具导航进入子目录时，它会**渐进式发现**这些目录中的上下文文件，并在其变得相关的时刻将其注入对话。
 
 ```
 my-project/
