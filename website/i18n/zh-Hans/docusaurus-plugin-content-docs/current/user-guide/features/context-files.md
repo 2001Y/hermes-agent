@@ -6,12 +6,13 @@ description: "项目上下文文件 — .hermes.md、AGENTS.md、CLAUDE.md、全
 
 # 上下文文件
 
-Hermes Agent 会自动发现并加载上下文文件，以塑造其行为方式。部分文件属于项目本地文件，从工作目录中发现。`SOUL.md` 现在对整个 Hermes 实例全局生效，仅从 `HERMES_HOME` 加载。
+Hermes Agent 会加载配置的共享文件，并自动发现项目上下文文件，以塑造其行为方式。部分文件属于项目本地文件，从工作目录中发现。`SOUL.md` 现在对整个 Hermes 实例全局生效，仅从 `HERMES_HOME` 加载。
 
 ## 支持的上下文文件
 
 | 文件 | 用途 | 发现方式 |
 |------|---------|-----------| 
+| **配置的外部文件** | 跨项目共享的指令 | 按 `context.external_files` 声明的顺序加载 |
 | **.hermes.md** / **HERMES.md** | 项目指令（最高优先级） | 向上遍历至 git 根目录 |
 | **AGENTS.md** | 项目指令、规范、架构说明 | 启动时的 CWD 及子目录（渐进式） |
 | **CLAUDE.md** | Claude Code 上下文文件（同样支持检测） | 启动时的 CWD 及子目录（渐进式） |
@@ -20,8 +21,45 @@ Hermes Agent 会自动发现并加载上下文文件，以塑造其行为方式�
 | **.cursor/rules/*.mdc** | Cursor IDE 规则模块 | 仅 CWD |
 
 :::info 优先级系统
-每次会话仅加载**一种**项目上下文类型（先匹配先生效）：`.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`。**SOUL.md** 始终作为 agent 身份独立加载（插槽 #1）。
+配置的外部文件会额外加载在项目上下文之前。每次会话仅加载**一种**项目上下文类型（先匹配先生效）：`.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`。**SOUL.md** 始终作为 agent 身份独立加载（插槽 #1）。
 :::
+
+## 配置外部上下文文件 {#configured-external-context-files}
+
+将可信指令文件的有序列表添加到 `context.external_files`：
+
+```yaml
+context:
+  engine: compressor
+  external_files:
+    - ~/.codex/AGENTS.md
+    - ~/.claude/CLAUDE.md
+```
+
+这样无需将共享规则复制或链接到每个项目。支持绝对路径、`~`、`${RULES_DIR}` 等环境
+变量引用，以及相对于用户主目录的路径。主目录相对路径不受会话工作目录和当前 profile
+的 `HERMES_HOME` 影响；列表本身属于当前 profile。文件按声明顺序加载在项目规则之前，
+不会替换原有项目上下文的优先级或从 git 根目录到工作目录的加载链。
+
+不存在、为空、无法读取、不是普通文件、被拦截或读取超时的条目会被跳过。外部文件使用
+UTF-8（包括 BOM），遵循与项目文件相同的 prompt 注入扫描、每文件
+`context_file_max_chars` 上限和配置的文件读取安全策略。同一文件系统对象的别名，
+包括硬链接以及与启动时项目上下文重叠的文件，只会加载一次。
+
+```bash
+hermes setup context
+hermes config set context.external_files '~/.codex/AGENTS.md, ~/.claude/CLAUDE.md'
+# 显式列表可保留路径中的逗号：
+hermes config set context.external_files '["~/rules,team.md", "~/other.md"]'
+```
+
+设置检测器只提供已存在的 Codex 和 Claude 共享文件，不读取内容，也不会未经选择自动
+启用。Dashboard 使用每行一个路径的编辑方式，保留路径中的逗号。
+`hermes --ignore-rules` 会同时跳过外部和项目上下文文件。
+
+已加载的上下文快照在普通轮次和会话恢复期间保持稳定，重启后也如此。修改文件内容或
+配置列表，会在新会话或下一次上下文压缩重建系统 prompt 时生效。没有文件快照的旧会话
+会保留已存储的系统 prompt，直到该次重建，不会在恢复时重新读取当前文件。
 
 ## AGENTS.md
 
@@ -105,6 +143,8 @@ Hermes 兼容 Cursor IDE 的 `.cursorrules` 文件和 `.cursor/rules/*.mdc` 规�
 ### 启动时（系统 prompt）
 
 上下文文件由 `agent/prompt_builder.py` 中的 `build_context_files_prompt()` 加载：
+
+配置的外部文件先按声明顺序读取，随后按下述原有优先级和目录链规则发现项目上下文。
 
 1. **扫描工作目录** — 依次检查 `.hermes.md` → `AGENTS.md` → `CLAUDE.md` → `.cursorrules`（先匹配先生效）
 2. **读取内容** — 以 UTF-8 文本读取每个文件
