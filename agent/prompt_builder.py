@@ -1660,7 +1660,7 @@ def _read_context_record(path: Path) -> ContextFileRead:
     return read_context_file(path, timeout=_get_context_file_read_timeout())
 
 
-def _claim_context_identity(record: ContextFileRead, loaded_paths: Optional[set]) -> bool:
+def _claim_context_identity(record: ContextFileRead, loaded_paths: Optional[set], snapshot=None) -> bool:
     """Claim one nonempty source after project-type selection, preserving first-source precedence."""
     if not record.content:
         return False
@@ -1668,6 +1668,8 @@ def _claim_context_identity(record: ContextFileRead, loaded_paths: Optional[set]
         if record.identity in loaded_paths:
             return False
         loaded_paths.add(record.identity)
+    if snapshot is not None:
+        snapshot.include(record)
     return True
 
 
@@ -1772,18 +1774,18 @@ def _project_context_suppressed(cwd: Optional[str], cwd_path: Path, allow_instal
 
 
 def _load_hermes_md(
-    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None,
+    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None, snapshot=None,
 ) -> Optional[str]:
     """.hermes.md / HERMES.md — nearest match walking up to the git root."""
     for label, path, record in _hermes_md_candidates(cwd_path):
         if record.content:
             return (_context_section(_strip_yaml_frontmatter(record.content), label, ".hermes.md", path, context_length)
-                    if _claim_context_identity(record, loaded_paths) else "")
+                    if _claim_context_identity(record, loaded_paths, snapshot) else "")
     return None
 
 
 def _load_agents_md(
-    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None,
+    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None, snapshot=None,
 ) -> Optional[str]:
     """AGENTS.md — merged directory chain from git root down to cwd.
 
@@ -1801,7 +1803,7 @@ def _load_agents_md(
         content = record.content
         if content and content not in seen_content:  # else: empty, or an identical copy along the chain
             seen_content.add(content)
-            if _claim_context_identity(record, loaded_paths):
+            if _claim_context_identity(record, loaded_paths, snapshot):
                 sections.append(_context_section(content, label, label, candidate, context_length))
     if len(sections) <= 1:
         return sections[0] if sections else ("" if seen_content else None)
@@ -1811,18 +1813,18 @@ def _load_agents_md(
 
 
 def _load_claude_md(
-    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None,
+    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None, snapshot=None,
 ) -> Optional[str]:
     """CLAUDE.md / claude.md — cwd only."""
     for name, path, record in _claude_md_candidates(cwd_path):
         if record.content:
             return (_context_section(record.content, name, "CLAUDE.md", path, context_length)
-                    if _claim_context_identity(record, loaded_paths) else "")
+                    if _claim_context_identity(record, loaded_paths, snapshot) else "")
     return None
 
 
 def _load_cursorrules(
-    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None,
+    cwd_path: Path, context_length: Optional[int] = None, loaded_paths: Optional[set] = None, snapshot=None,
 ) -> Optional[str]:
     """.cursorrules + .cursor/rules/*.mdc — cwd only, concatenated."""
     candidates = _cursorrules_candidates(cwd_path)
@@ -1830,7 +1832,7 @@ def _load_cursorrules(
         return None
     cursorrules_content = "".join(
         f"## {label}\n\n{_scan_context_content(record.content, label)}\n\n"
-        for label, _path, record in candidates if _claim_context_identity(record, loaded_paths)
+        for label, _path, record in candidates if _claim_context_identity(record, loaded_paths, snapshot)
     )
     if not cursorrules_content:
         return ""
@@ -1840,7 +1842,7 @@ def _load_cursorrules(
 
 def build_context_files_prompt(
     cwd: Optional[str] = None, skip_soul: bool = False, context_length: Optional[int] = None,
-    allow_install_tree_fallback: bool = False, home_override: "Path | None" = None,
+    allow_install_tree_fallback: bool = False, home_override: "Path | None" = None, context_snapshot=None,
 ) -> str:
     """Discover and load context files for the system prompt (each capped, see ``_get_context_file_max_chars``).
 
@@ -1851,12 +1853,13 @@ def build_context_files_prompt(
     """
     from agent.external_context import external_context_scope
     with external_context_scope(home_override):
-        return _build_context_files_prompt(cwd, skip_soul, context_length, allow_install_tree_fallback, home_override)
+        return _build_context_files_prompt(
+            cwd, skip_soul, context_length, allow_install_tree_fallback, home_override, context_snapshot)
 
 
 def _build_context_files_prompt(
     cwd: Optional[str], skip_soul: bool, context_length: Optional[int],
-    allow_install_tree_fallback: bool, home_override: "Path | None",
+    allow_install_tree_fallback: bool, home_override: "Path | None", context_snapshot=None,
 ) -> str:
     from agent.external_context import load_external_context_files, safe_context_metadata
 
@@ -1864,7 +1867,7 @@ def _build_context_files_prompt(
     loaded_paths: set = set()
     sections = []
     for source in load_external_context_files(home_override=home_override):
-        if _claim_context_identity(source, loaded_paths):
+        if _claim_context_identity(source, loaded_paths, context_snapshot):
             body = f"## {source.label}\n\n{_scan_context_content(source.content, source.label)}"
             sections.append(_truncate_content(
                 body, source.label, context_length=context_length,
@@ -1878,7 +1881,7 @@ def _build_context_files_prompt(
         # A duplicate still selects its project type: do not fall through to lower-priority rules.
         project_loaded_paths = loaded_paths if loaded_paths else None
         for loader in (_load_hermes_md, _load_agents_md, _load_claude_md, _load_cursorrules):
-            project = loader(cwd_path, context_length, project_loaded_paths)
+            project = loader(cwd_path, context_length, project_loaded_paths, context_snapshot)
             if project is not None:
                 sections.append(project)
                 break
